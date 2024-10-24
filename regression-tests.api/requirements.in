@@ -1,7 +1,7 @@
 # To generate requirements.txt, install pip-tools and run:
 #  pip-compile --generate-hashes -U requirements.in
 
-requests==2.31.0
+requests==2.32.2
 pytest
 parameterized
 mysql-connector
