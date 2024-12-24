@@ -5,10 +5,6 @@ RUST_LIBS = $(top_builddir)/settings/rust/libsettings.a $(LIBDL)
 
 AM_CPPFLAGS = $(LUA_CFLAGS) $(YAHTTP_CFLAGS) $(BOOST_CPPFLAGS) $(LIBSODIUM_CFLAGS) $(NET_SNMP_CFLAGS) $(LIBCAP_CFLAGS) $(SANITIZER_FLAGS) -O3 -Wall -pthread -DSYSCONFDIR=\"${sysconfdir}\" $(SYSTEMD_CFLAGS)
 
-if LIBDECAF
-AM_CPPFLAGS += $(LIBDECAF_CFLAGS)
-endif
-
 AM_CPPFLAGS += \
 	-I$(top_srcdir)/ext/json11 \
 	-I$(top_srcdir)/ext/protozero/include \
@@ -198,6 +194,8 @@ pdns_recursor_SOURCES = \
 	rec-tcounters.cc rec-tcounters.hh \
 	rec-tcp.cc \
 	rec-tcpout.cc rec-tcpout.hh \
+	rec-xfr.cc rec-xfr.hh \
+	rec-xfrtracker.cc \
 	rec-zonetocache.cc rec-zonetocache.hh \
 	rec_channel.cc rec_channel.hh rec_metrics.hh \
 	rec_channel_rec.cc \
@@ -330,6 +328,7 @@ testrunner_SOURCES = \
 	rec-system-resolve.hh rec-system-resolve.cc \
 	rec-taskqueue.cc rec-taskqueue.hh \
 	rec-tcounters.cc rec-tcounters.hh \
+	rec-xfrtracker.cc \
 	rec-zonetocache.cc rec-zonetocache.hh \
 	recpacketcache.cc recpacketcache.hh \
 	recursor_cache.cc recursor_cache.hh \
@@ -401,6 +400,7 @@ testrunner_SOURCES = \
 	unix_utility.cc \
 	validate-recursor.cc validate-recursor.hh \
 	validate.cc validate.hh \
+	version.cc version.hh \
 	zonemd.cc zonemd.hh \
 	zoneparser-tng.cc zoneparser-tng.hh
 
@@ -448,12 +448,6 @@ testrunner_LDADD += $(LIBSODIUM_LIBS)
 endif
 
 
-
-if LIBDECAF
-pdns_recursor_SOURCES += \
-	decafsigners.cc
-pdns_recursor_LDADD += $(LIBDECAF_LIBS)
-endif
 
 if MALLOC_TRACE
 pdns_recursor_SOURCES += \
@@ -544,12 +538,14 @@ rec_control_SOURCES = \
 	qtype.cc \
 	rcpgenerator.cc	rcpgenerator.hh \
 	rec-lua-conf.cc rec-lua-conf.hh \
+	rec-system-resolve.cc rec-system-resolve.hh \
 	rec_channel.cc rec_channel.hh \
 	rec_control.cc \
 	settings/cxxsupport.cc \
 	sillyrecords.cc \
 	sortlist.cc sortlist.hh \
 	svc-records.cc svc-records.hh \
+	threadname.cc threadname.hh \
 	unix_utility.cc
 
 nodist_rec_control_SOURCES = \

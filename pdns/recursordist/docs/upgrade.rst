@@ -4,6 +4,48 @@ Upgrade Guide
 Before upgrading, it is advised to read the :doc:`changelog/index`.
 When upgrading several versions, please read **all** notes applying to the upgrade.
 
+5.1.0 to master
+----------------
+
+Changed behaviour
+^^^^^^^^^^^^^^^^^
+Parsing of old-style settings is no longer enabled by default.
+Convert your settings file to YAML (see :doc:`appendices/yamlconversion`) or pass ``--enable-old-settings`` on the command line.
+
+The way :ref:`setting-yaml-incoming.max_tcp_clients` is enforced has changed.
+If there are too many incoming TCP connections, new connections will be accepted but then closed immediately.
+Previously, excess connections would linger in the OS listen queue until timeout or until processing of incoming TCP connections resumed due to the number of connections being processed dropping below the limit.
+There is a new metric ``tcp-overflow`` that counts the connections closed immediately.
+
+The ``outqueries-per-query`` value reported in the log by the periodic statistics function is now reported as ``outqueries-per-query-perc`` as it is a percentage.
+A value of 1 means that on average each 100 incoming queries lead to a single query to an authoritative server.
+
+A new ``rec_control reload-yaml`` command has been introduced as an alias for ``reload-lua-config``.
+Both commands will (if YAML settings are active), reload the runtime reloadable parts of the YAML settings.
+These are the YAML settings that correspond to Lua configuration items, plus a few new settings that have no Lua equivalent.
+The documentation has been updated to state more clearly which settings can be modified at runtime.
+
+Changed settings
+^^^^^^^^^^^^^^^^
+
+- The :ref:`setting-yaml-incoming.max_tcp_clients` default value has been raised 1024.
+- The :ref:`setting-yaml-outgoing.udp_source_port_avoid` default value now includes port 4791.
+
+New Settings
+^^^^^^^^^^^^
+
+- The :ref:`setting-yaml-recursor.serve_rfc6303` settings has been introduced to implement :rfc:`6303`. By default this setting is enabled so this potentially changes behaviour for names inside the ``ip6.arpa`` domain.
+- The :ref:`setting-yaml-recursor.lua_start_stop_script` settings has been introduced to specify Lua scripts to run on startup and shutdown.
+- The :ref:`setting-yaml-recursor.forwarding_catalog_zones` settings has been introduced to populate forwarding zones using catalog zones.
+
+5.1.2 to 5.1.3
+--------------
+
+New Settings
+^^^^^^^^^^^^
+
+- The :ref:`setting-serve-rfc6303` settings has been introduced to implement :rfc:`6303`. By default this setting is enabled so this potentially changes behaviour for names inside the ``ip6.arpa`` domain.
+
 5.1.1 to 5.1.2, 5.0.8 to 5.0.9 and 4.9.8 to 4.9.9
 -------------------------------------------------
 
@@ -11,17 +53,6 @@ New settings
 ^^^^^^^^^^^^
 - The :ref:`setting-yaml-recordcache.max_rrset_size` setting has been introduced to limit the number of records in a result set.
 - The :ref:`setting-yaml-recordcache.limit_qtype_any` setting has been introduced to limit the number of records in answers to ANY queries.
-
-5.1.0 to master
-----------------
-
-Changed behaviour
-^^^^^^^^^^^^^^^^^
-The way :ref:`setting-yaml-incoming.max_tcp_clients` is enforced has changed.
-If there are too many incoming TCP connections, new connections will be accepted but then closed immediately.
-Previously, excess connections would linger in the OS listen queue until timeout or until processing of incoming TCP connections resumed due to the number of connections being processed dropping below the limit.
-There is a new metric ``tcp-overflow`` that counts the connections closed immediately.
-
 
 5.0.6 to 5.1.0
 --------------
@@ -143,7 +174,7 @@ Changed settings
 Metrics
 ^^^^^^^
 The way metrics are collected has been changed to increase performance, especially when many thread are used.
-This allows for solving a long standing issue that some statistics were not updated on packet cache hits.
+This allows for solving a long-standing issue that some statistics were not updated on packet cache hits.
 This is now resolved, but has the consequence that some metrics (in particular response related ones) changed behaviour as they now also reflect packet cache hits, while they did not before.
 This affects the results shown by ``rec_control get-qtypelist`` and the ``response-by-qtype``, ``response-sizes`` and ``response-by-rcode`` items returned by the ``/api/v1/servers/localhost/statistics`` API endpoint.
 Additionally, most ``RCodes`` and ``QTypes`` that are marked ``Unassigned``, ``Reserved`` or ``Obsolete`` by IANA are not accounted, to reduce the memory consumed by these metrics.

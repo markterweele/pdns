@@ -248,7 +248,7 @@ pub struct ProxyMapping {
     domains: Vec<String>,
 }
 
-// A struct holding both a vector of forward zones and a vector o auth zones, used by REST API code
+// A struct holding both a vector of forward zones and a vector of auth zones, used by REST API code
 #[derive(Deserialize, Serialize, Debug, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct ApiZones {
@@ -256,6 +256,51 @@ pub struct ApiZones {
     auth_zones: Vec<AuthZone>,
     #[serde(default, skip_serializing_if = "crate::is_default")]
     forward_zones: Vec<ForwardZone>,
+}
+
+#[derive(Deserialize, Serialize, Clone, Debug, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct XFR {
+    #[serde(default, skip_serializing_if = "crate::is_default")]
+    addresses: Vec<String>,
+    #[serde(default, skip_serializing_if = "crate::is_default")]
+    zoneSizeHint: u32,
+    #[serde(default, skip_serializing_if = "crate::is_default")]
+    tsig: TSIGTriplet,
+    #[serde(default, skip_serializing_if = "crate::is_default")]
+    refresh: u32,
+    #[serde(default, skip_serializing_if = "crate::is_default")]
+    maxReceivedMBytes: u32,
+    #[serde(default, skip_serializing_if = "crate::is_default")]
+    localAddress: String,
+    #[serde(default = "crate::U32::<20>::value", skip_serializing_if = "crate::U32::<20>::is_equal")]
+    axfrTimeout: u32,
+}
+
+#[derive(Deserialize, Serialize, Clone, Debug, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct FCZDefault {
+    #[serde(default, skip_serializing_if = "crate::is_default")]
+    name: String,
+    #[serde(default, skip_serializing_if = "crate::is_default")]
+    forwarders: Vec<String>,
+    #[serde(default, skip_serializing_if = "crate::is_default")]
+    recurse: bool,
+    #[serde(default, skip_serializing_if = "crate::is_default")]
+    notify_allowed: bool,
+ }
+
+#[derive(Deserialize, Serialize, Clone, Debug, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct ForwardingCatalogZone {
+    #[serde(default, skip_serializing_if = "crate::is_default")]
+    zone: String,
+    #[serde(default, skip_serializing_if = "crate::is_default")]
+    notify_allowed: bool,
+    #[serde(default, skip_serializing_if = "crate::is_default")]
+    xfr: XFR,
+    #[serde(default, skip_serializing_if = "crate::is_default")]
+    groups: Vec<FCZDefault>,
 }
 
 // Two structs used to generated YAML based on a vector of name to value mappings
@@ -278,6 +323,7 @@ struct Value {
     vec_zonetocache_val: Vec<ZoneToCache>,
     vec_allowedadditionalqtype_val: Vec<AllowedAdditionalQType>,
     vec_proxymapping_val: Vec<ProxyMapping>,
+    vec_forwardingcatalogzone_val: Vec<ForwardingCatalogZone>,
 }
 
 struct OldStyle {
@@ -318,7 +364,7 @@ extern "Rust" {
     // Merge a string representing YAML settings into a existing setttings struct
     fn merge(lhs: &mut Recursorsettings, rhs: &str) -> Result<()>;
 
-    // Validate the sections inside the main settings struct, sections themselves will valdiate their fields
+    // Validate the sections inside the main settings struct, sections themselves will validate their fields
     fn validate(self: &Recursorsettings) -> Result<()>;
     // The validate function below are "hand-crafted" as their structs are not generated
     fn validate(self: &AuthZone, field: &str) -> Result<()>;
@@ -342,6 +388,7 @@ extern "Rust" {
     fn validate_trustanchors(field: &str, vec: &Vec<TrustAnchor>) -> Result<()>;
     fn validate_negativetrustanchors(field: &str, vec: &Vec<NegativeTrustAnchor>) -> Result<()>;
     fn api_delete_zone(file: &str, zone: &str) -> Result<()>;
+    fn api_delete_zones(file: &str) -> Result<()>;
 }
 
 unsafe extern "C++" {

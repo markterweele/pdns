@@ -131,6 +131,14 @@ This state can be modified from the various hooks.
 
     :returns: A table of EDNSOptionView objects, indexed on the ECS Option code
 
+  .. method:: DNSQuestion::getElapsedUs -> double
+
+     .. versionadded:: 1.9.8
+
+     Return the amount of time that has elapsed since the query was received.
+
+     :returns: A double indicating elapsed time in microseconds
+
   .. method:: DNSQuestion:getHTTPHeaders() -> table
 
     .. versionadded:: 1.4.0
@@ -266,7 +274,7 @@ This state can be modified from the various hooks.
         dq:setContent(raw)
         return DNSAction.Allow
       end
-      addAction(AndRule({QTypeRule(DNSQType.A), makeRule('custom.async.tests.powerdns.com')}), LuaAction(replaceQueryPayload))
+      addAction(AndRule({QTypeRule(DNSQType.A), QNameSuffixRule('custom.async.tests.powerdns.com')}), LuaAction(replaceQueryPayload))
 
     :param string data: The raw DNS payload
 

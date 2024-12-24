@@ -40,6 +40,7 @@ The number of records to cache in the aggressive cache. If set to a value greate
 To use this, DNSSEC processing or validation must be enabled by setting :ref:`setting-dnssec` to ``process``, ``log-fail`` or ``validate``.
  ''',
         'versionadded': '4.5.0',
+        'runtime': 'set-max-aggr-nsec-cache-size',
     },
     {
         'name' : 'aggressive_cache_min_nsec3_hit_ratio',
@@ -75,6 +76,7 @@ When the Proxy Protocol is enabled (see :ref:`setting-proxy-protocol-from`), the
 
 Note that specifying an IP address without a netmask uses an implicit netmask of /32 or /128.
  ''',
+        'runtime': ['reload-acls'],
     },
     {
         'name' : 'allow_from_file',
@@ -96,6 +98,7 @@ Overrides the :ref:`setting-allow-from` setting. Example content of th specified
  - ::1
 
  ''',
+        'runtime': ['reload-acls'],
     },
     {
         'name' : 'allow_notify_for',
@@ -108,7 +111,8 @@ Domain names specified in this list are used to permit incoming
 NOTIFY operations to wipe any cache entries that match the domain
 name. If this list is empty, all NOTIFY operations will be ignored.
  ''',
-    'versionadded': '4.6.0'
+        'versionadded': '4.6.0',
+        'runtime': ['reload-acls'],
     },
     {
         'name' : 'allow_notify_for_file',
@@ -132,7 +136,8 @@ Like :ref:`setting-allow-notify-for`, except reading a sequence of names from fi
  - example.org
 
  ''',
-    'versionadded': '4.6.0'
+        'versionadded': '4.6.0',
+        'runtime': ['reload-acls'],
     },
     {
         'name' : 'allow_notify_from',
@@ -176,7 +181,8 @@ the zone specified in the NOTIFY operation, but only if that zone (or
 one of its parents) is included in :ref:`setting-allow-notify-for`,
 :ref:`setting-allow-notify-for-file`, or :ref:`setting-forward-zones-file` with a ``allow_notify`` set to ``true``.
  ''',
-    'versionadded': '4.6.0'
+        'versionadded': '4.6.0',
+        'runtime': ['reload-acls'],
     },
     {
         'name' : 'allow_notify_from_file',
@@ -192,7 +198,8 @@ by a '#'.
         'doc-new' : '''
 Like :ref:`setting-allow-notify-from`, except reading a sequence of `Subnet`_ from file.
  ''',
-    'versionadded': '4.6.0'
+        'versionadded': '4.6.0',
+        'runtime': ['reload-acls'],
     },
     {
         'name' : 'allow_no_rd',
@@ -281,6 +288,7 @@ DNSSEC is not supported. Example:
     - zone: powerdns.com
       file: /var/zones/powerdns.com
  ''',
+        'runtime': ['reload-zones'],
     },
     {
         'name' : 'interval',
@@ -347,6 +355,7 @@ See :doc:`metrics`.
 Will send all available metrics to these servers via the carbon protocol, which is used by graphite and metronome.
 See :doc:`metrics`.
  ''',
+        'runtime': 'set-carbon-server',
     },
     {
         'name' : 'chroot',
@@ -479,7 +488,8 @@ Any servers' name suffix-matching the supplied names will never be throttled.
 .. warning::
   Most servers on the internet do not respond for a good reason (overloaded or unreachable), ``dont-throttle-names`` could make this load on the upstream server even higher, resulting in further service degradation.
  ''',
-    'versionadded': '4.2.0'
+        'versionadded': '4.2.0',
+        'runtime': ['add-dont-throttle-names', 'clear-dont-throttle-names'],
     },
     {
         'name' : 'dont_throttle_netmasks',
@@ -509,7 +519,8 @@ In this case, :ref:`setting-dont-throttle-netmasks` could be set to include ``19
 .. warning::
   Most servers on the internet do not respond for a good reason (overloaded or unreachable), ``dont-throttle-netmasks`` could make this load on the upstream server even higher, resulting in further service degradation.
  ''',
-    'versionadded': '4.2.0'
+        'versionadded': '4.2.0',
+        'runtime': ['rec_control add-dont-throttle-netmasks', 'rec_control clear-dont-throttle-netmask'],
     },
     {
         'name' : 'devonly_regression_test_mode',
@@ -688,6 +699,7 @@ On such systems not disabling some algorithms (or changing the security policy) 
 Log every DNSSEC validation failure.
 **Note**: This is not logged per-query but every time records are validated as Bogus.
  ''',
+        'runtime': 'set-dnssec-log-bogus',
     },
     {
         'name' : 'dont_query',
@@ -731,7 +743,7 @@ This defaults to not using the requestor address inside RFC1918 and similar 'pri
         'doc' : '''
 Number of bits of client IPv4 address to pass when sending EDNS Client Subnet address information.
  ''',
-    'versionadded': '4.1.0'
+        'versionadded': '4.1.0',
     },
     {
         'name' : 'ipv4_cache_bits',
@@ -780,7 +792,7 @@ That is, only if both the limits apply, the record will not be cached. This deci
         'help' : 'If we should never cache IPv4 ECS responses',
         'doc' : '''
 When set, never cache replies carrying EDNS IPv4 Client Subnet scope in the record cache.
-In this case the decision made by ```ecs-ipv4-cache-bits`` and ``ecs-cache-limit-ttl`` is no longer relevant.
+In this case the decision made by ``ecs-ipv4-cache-bits`` and ``ecs-cache-limit-ttl`` is no longer relevant.
  ''',
     'versionadded': '4.5.0'
     },
@@ -793,7 +805,7 @@ In this case the decision made by ```ecs-ipv4-cache-bits`` and ``ecs-cache-limit
         'help' : 'If we should never cache IPv6 ECS responses',
         'doc' : '''
 When set, never cache replies carrying EDNS IPv6 Client Subnet scope in the record cache.
-In this case the decision made by ```ecs-ipv6-cache-bits`` and ``ecs-cache-limit-ttl`` is no longer relevant.
+In this case the decision made by ``ecs-ipv6-cache-bits`` and ``ecs-cache-limit-ttl`` is no longer relevant.
  ''',
     'versionadded': '4.5.0'
     },
@@ -809,9 +821,9 @@ This setting artificially raises the TTLs of records in the ANSWER section of EC
 Setting this to a value greater than 1 technically is an RFC violation, but might improve performance a lot.
 Using a value of 0 impacts performance of TTL 0 records greatly, since it forces the recursor to contact
 authoritative servers every time a client requests them.
-Can be set at runtime using ``rec_control set-ecs-minimum-ttl 3600``.
  ''',
-        'versionchanged': ('4.5.0', 'Old versions used default 0.')
+        'versionchanged': ('4.5.0', 'Old versions used default 0.'),
+        'runtime': 'set-ecs-minimum-ttl',
     },
     {
         'name' : 'cache_limit_ttl',
@@ -940,6 +952,19 @@ By default, this option is empty, meaning no EDNS Client Subnet information is s
     'versionadded': '4.5.0'
     },
     {
+        'name' : 'enable_old_settings',
+        'section' : 'recursor',
+        'type' : LType.Bool,
+        'default' : 'false',
+        'help' : 'Enable (deprecated) parsing of old-style settings',
+        'doc' : '''
+Enable the deprecated parsing of old-style settings.
+Only makes sense to set on the command line.
+        ''',
+        'skip-yaml': True,
+        'versionadded': '5.2.0',
+    },
+    {
         'name' : 'entropy_source',
         'section' : 'recursor',
         'type' : LType.String,
@@ -975,7 +1000,8 @@ This file can be used to serve data authoritatively using :ref:`setting-export-e
 Enable the recording and logging of ref:`event traces`. This is an experimental feature and subject to change.
 Possible values are 0: (disabled), 1 (add information to protobuf logging messages) and 2 (write to log) and 3 (both).
  ''',
-    'versionadded': '4.6.0'
+        'versionadded': '4.6.0',
+        'runtime': 'set-event-trace-enabled',
     },
     {
         'name' : 'export_etc_hosts',
@@ -1084,7 +1110,8 @@ To prevent this, add a Negative Trust Anchor (NTA) for this zone in the :ref:`se
 If this forwarded zone is signed, instead of adding NTA, add the DS record to the :ref:`setting-lua-config-file`.
 See the :doc:`dnssec` information.
  ''',
-        'versionchanged' : ('5.2.0',  'Zones having ``notify_allowed`` set will be added to :ref:`setting-yaml-incoming.allow_notify_for`.')
+        'versionchanged' : ('5.2.0',  'Zones having ``notify_allowed`` set will be added to :ref:`setting-yaml-incoming.allow_notify_for`.'),
+        'runtime': ['reload-zones'],
     },
     {
         'name' : 'forward_zones_file',
@@ -1125,6 +1152,7 @@ The DNSSEC notes from :ref:`setting-forward-zones` apply here as well.
  ''',
      'versionchanged': [('4.0.0', '(Old style settings only) Comments are allowed, everything behind ``#`` is ignored.'),
                         ('4.6.0', '(Old style settings only) Zones prefixed with a ``^`` are added to the :ref:`setting-allow-notify-for` list. Both prefix characters can be used if desired, in any order.')],
+        'runtime': ['reload-zones'],
     },
     {
         'name' : 'forward_zones_recurse',
@@ -1139,6 +1167,7 @@ This is because we rely on the forwarder to resolve the query fully.
 
 See :ref:`setting-forward-zones` for additional options (such as supplying multiple recursive servers) and an important note about DNSSEC.
  ''',
+        'runtime': ['reload-zones'],
     },
     {
         'name' : 'gettag_needs_edns_options',
@@ -1443,6 +1472,7 @@ Maximum number of DNS record cache entries, shared by all threads since 4.4.0.
 Each entry associates a name and type with a record set.
 The size of the negative cache is 10% of this number.
  ''',
+        'runtime': 'set-max-cache-entries',
     },
     {
         'name' : 'max_ttl',
@@ -1532,6 +1562,7 @@ Maximum number of simultaneous MTasker threads, per worker thread.
         'doc' : '''
 Maximum number of Packet Cache entries. Sharded and shared by all threads since 4.9.0.
 ''',
+        'runtime': 'set-max-packetcache-entries',
     },
     {
         'name' : 'max_qperq',
@@ -1594,7 +1625,7 @@ of a single client query. If IPv6 is enabled, an A and a AAAA query
 for a name counts as 1. If a zone publishes more than this number of
 NS records, the limit is further reduced for that zone by lowering
 it by the number of NS records found above the
-:ref:`setting-max-ns-address-qperq` value. The limit wil not be reduced to a
+:ref:`setting-max-ns-address-qperq` value. The limit will not be reduced to a
 number lower than 5.
  ''',
     'versionadded' : ['4.1.16', '4.2.2', '4.3.1']
@@ -1643,11 +1674,12 @@ If :ref:`setting-qname-minimization` is enabled, the fallback code in case of a 
         'name' : 'max_tcp_clients',
         'section' : 'incoming',
         'type' : LType.Uint64,
-        'default' : '128',
+        'default' : '1024',
         'help' : 'Maximum number of simultaneous TCP clients',
         'doc' : '''
 Maximum number of simultaneous incoming TCP connections allowed.
  ''',
+        'versionchanged': ('5.2.0', 'Before 5.2.0 the default was 128.'),
     },
     {
         'name' : 'max_tcp_per_client',
@@ -1657,7 +1689,7 @@ Maximum number of simultaneous incoming TCP connections allowed.
         'help' : 'If set, maximum number of TCP sessions per client (IP address)',
         'doc' : '''
 Maximum number of simultaneous incoming TCP connections allowed per client (remote IP address).
- 0 means unlimited.
+0 means unlimited.
  ''',
     },
     {
@@ -1709,9 +1741,9 @@ This setting artificially raises all TTLs to be at least this long.
 Setting this to a value greater than 1 technically is an RFC violation, but might improve performance a lot.
 Using a value of 0 impacts performance of TTL 0 records greatly, since it forces the recursor to contact
 authoritative servers each time a client requests them.
-Can be set at runtime using ``rec_control set-minimum-ttl 3600``.
  ''',
-     'versionchanged': ('4.5.0', 'Old versions used default 0.')
+        'versionchanged': ('4.5.0', 'Old versions used default 0.'),
+        'runtime': 'set-minimum-ttl',
     },
     {
         'name' : 'tracking',
@@ -2385,6 +2417,7 @@ Setting this to an empty string disables secpoll.
 This makes the server authoritatively aware of: ``10.in-addr.arpa``, ``168.192.in-addr.arpa``, ``16-31.172.in-addr.arpa``, which saves load on the AS112 servers.
 Individual parts of these zones can still be loaded or forwarded.
  ''',
+        'runtime': ['reload-zones'],
     },
     {
         'name' : 'serve_rfc6303',
@@ -2398,6 +2431,7 @@ Individual parts of these zones can still be loaded or forwarded.
 :ref:`setting-serve-rfc1918` must be enabled for this option to take effect.
 ''',
         'versionadded': ['5.1.3', '5.2.0'],
+        'runtime': ['reload-zones'],
     },
     {
         'name' : 'serve_stale_extensions',
@@ -2947,11 +2981,11 @@ See :ref:`setting-udp-source-port-min`.
         'name' : 'udp_source_port_avoid',
         'section' : 'outgoing',
         'type' : LType.ListStrings,
-        'default' : '11211',
-        'help' : 'List of comma separated UDP port number to avoid',
+        'default' : '4791,11211',
+        'help' : 'List of comma separated UDP port numbers to avoid',
         'doc' : '''
 A list of comma-separated UDP port numbers to avoid when binding.
-Ex: `5300,11211`
+Ex: `4791,5300,11211`
 
 See :ref:`setting-udp-source-port-min`.
  ''',
@@ -2962,12 +2996,14 @@ A sequence of UDP port numbers to avoid when binding. For example:
 
  outgoing:
    udp_source_port_avoid:
+   - 4791
    - 5300
    - 11211
 
 See :ref:`setting-udp-source-port-min`.
  ''',
-    'versionadded': '4.2.0'
+        'versionadded': '4.2.0',
+        'versionchanged': ('5.2.0', 'port 4791 was added to the default list'),
     },
     {
         'name' : 'udp_truncation_threshold',
@@ -3323,7 +3359,7 @@ If this check draws the wrong conclusion, you can disable it.
         'name' : 'trustanchors',
         'section' : 'dnssec',
         'type' : LType.ListTrustAnchors,
-        'default' : '[{name: ., dsrecords: [\'20326 8 2 e06d44b80b8f1d39a95c0b0d7c65d08458e880409bbc683457104237c7f8ec8d\']}]',
+        'default' : '[{name: ., dsrecords: [\'20326 8 2 e06d44b80b8f1d39a95c0b0d7c65d08458e880409bbc683457104237c7f8ec8d\', \'38696 8 2 683d2d0acb8c9b712a1948b27f741219298d0a450d612c483af444a4c0fb2b16\']}]',
         'docdefault' : '''
 
 .. code-block:: yaml
@@ -3331,6 +3367,7 @@ If this check draws the wrong conclusion, you can disable it.
    - name: .
      dsrecords:
      - 20326 8 2 e06d44b80b8f1d39a95c0b0d7c65d08458e880409bbc683457104237c7f8ec8d
+     - 38696 8 2 683d2d0acb8c9b712a1948b27f741219298d0a450d612c483af444a4c0fb2b16
 
 ''',
         'help' : 'Sequence of trust anchors',
@@ -3340,6 +3377,7 @@ If a zone appears multiple times, the entries in ``dsrecords`` are merged.
         ''',
         'skip-old' : 'Equivalent Lua config in :doc:`lua-config/dnssec`',
         'versionadded': '5.1.0',
+        'runtime': ['add-ta', 'clear-ta', 'reload-lua-config', 'reload-yaml'],
     },
     {
         'name' : 'negative_trustanchors',
@@ -3352,6 +3390,7 @@ Sequence of negative trust anchors.
         ''',
         'skip-old' : 'Equivalent Lua config in :doc:`lua-config/dnssec`',
         'versionadded': '5.1.0',
+        'runtime': ['add-nta', 'clear-nta', 'reload-lua-config', 'reload-yaml'],
     },
     {
         'name' : 'trustanchorfile',
@@ -3365,6 +3404,7 @@ This can be used to read distribution provided trust anchors, as for instance ``
         ''',
         'skip-old' : 'Equivalent Lua config in :doc:`lua-config/dnssec`',
         'versionadded': '5.1.0',
+        'runtime': ['reload-lua-config', 'reload-yaml'],
     },
     {
         'name' : 'trustanchorfile_interval',
@@ -3389,6 +3429,7 @@ Sequence of outgoing protobuf servers. Currently the maximum size of this list i
         ''',
         'skip-old' : 'Equivalent Lua config in :doc:`lua-config/protobuf`',
         'versionadded': '5.1.0',
+        'runtime': ['reload-lua-config', 'reload-yaml'],
     },
     {
         'name' : 'outgoing_protobuf_servers',
@@ -3401,6 +3442,7 @@ Sequence of outgoing protobuf servers. Currently the maximum size of this list i
         ''',
         'skip-old' : 'Equivalent Lua config in :doc:`lua-config/protobuf`',
         'versionadded': '5.1.0',
+        'runtime': ['reload-lua-config', 'reload-yaml'],
     },
     {
         'name' : 'protobuf_mask_v4',
@@ -3437,6 +3479,7 @@ Sequence of dnstap servers. Currently the maximum size of this list is one.
         ''',
         'skip-old' : 'Equivalent Lua config in :doc:`lua-config/protobuf`',
         'versionadded': '5.1.0',
+        'runtime': ['reload-lua-config', 'reload-yaml'],
     },
     {
         'name' : 'dnstap_nod_framestream_servers',
@@ -3449,6 +3492,7 @@ Sequence of NOD dnstap servers. Currently the maximum size of this list is one.
         ''',
         'skip-old' : 'Equivalent Lua config in :doc:`lua-config/protobuf`',
         'versionadded': '5.1.0',
+        'runtime': ['reload-lua-config', 'reload-yaml'],
     },
     {
         'name' : 'sortlists',
@@ -3473,6 +3517,7 @@ Sequence of RPZ entries.
         ''',
         'skip-old' : 'Equivalent Lua config in :doc:`lua-config/rpz`',
         'versionadded': '5.1.0',
+        'runtime': ['reload-lua-config', 'reload-yaml'],
     },
     {
         'name' : 'zonetocaches',
@@ -3485,6 +3530,7 @@ Sequence of ZoneToCache entries
         ''',
         'skip-old' : 'Equivalent Lua config in :doc:`lua-config/ztc`',
         'versionadded': '5.1.0',
+        'runtime': ['reload-lua-config', 'reload-yaml'],
     },
     {
         'name' : 'allowed_additional_qtypes',
@@ -3497,6 +3543,7 @@ Sequence of AllowedAdditionalQType
         ''',
         'skip-old' : 'Equivalent Lua config in :doc:`lua-config/additionals`',
         'versionadded': '5.1.0',
+        'runtime': ['reload-lua-config', 'reload-yaml'],
     },
     {
         'name' : 'proxymappings',
@@ -3509,5 +3556,31 @@ Sequence of ProxyMapping
         ''',
         'skip-old' : 'Equivalent Lua config in :doc:`lua-config/proxymapping`',
         'versionadded': '5.1.0',
+        'runtime': ['reload-lua-config', 'reload-yaml'],
+    },
+    {
+        'name' : 'lua_start_stop_script',
+        'section' : 'recursor',
+        'type' : LType.String,
+        'default' : '',
+        'help' : 'Lua script containing functions to run on startup and shutdown',
+        'doc' : '''
+Load this Lua script on startup and shutdown and run the Lua function ``on_recursor_start`` on startup and the Lua function ``on_recursor_stop`` on a ``nice`` shutdown (using ``rec_control quit-nicely`` of the :program:`Recursor` process.
+        ''',
+        'skip-old' : 'No equivalent old-style setting',
+        'versionadded': '5.2.0',
+    },
+    {
+        'name' : 'forwarding_catalog_zones',
+        'section' : 'recursor',
+        'type' : LType.ListForwardingCatalogZones,
+        'default' : '',
+        'help' : 'Sequence of ForwardingCatalogZone',
+        'doc' : '''
+Sequence of ForwardingCatalogZone
+        ''',
+        'skip-old' : 'No equivalent old style setting',
+        'versionadded': '5.2.0',
+        'runtime': ['reload-lua-config', 'reload-yaml'],
     },
 ]

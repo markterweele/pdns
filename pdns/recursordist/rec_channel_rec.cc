@@ -1513,37 +1513,35 @@ vector<ComboAddress>* pleaseGetTimeouts()
   return ret;
 }
 
-static string doGenericTopRemotes(pleaseremotefunc_t func)
+static string doGenericTopRemotes(const pleaseremotefunc_t& func)
 {
-  typedef map<ComboAddress, int, ComboAddress::addressOnlyLessThan> counts_t;
-  counts_t counts;
-
-  vector<ComboAddress> remotes = broadcastAccFunction<vector<ComboAddress>>(func);
-
-  unsigned int total = 0;
-  for (const ComboAddress& ca : remotes) {
-    total++;
-    counts[ca]++;
+  auto remotes = broadcastAccFunction<vector<ComboAddress>>(func);
+  const unsigned int total = remotes.size();
+  if (total == 0) {
+    return "No qualifying data available\n";
   }
 
-  typedef std::multimap<int, ComboAddress> rcounts_t;
-  rcounts_t rcounts;
+  std::map<ComboAddress, unsigned int, ComboAddress::addressOnlyLessThan> counts;
+  for (const auto& address : remotes) {
+    counts[address]++;
+  }
 
-  for (auto&& c : counts)
-    rcounts.emplace(-c.second, c.first);
+  std::multimap<unsigned int, ComboAddress> rcounts;
+  for (const auto& count : counts) {
+    rcounts.emplace(count.second, count.first);
+  }
 
   ostringstream ret;
   ret << "Over last " << total << " entries:\n";
   boost::format fmt("%.02f%%\t%s\n");
-  int limit = 0, accounted = 0;
-  if (total) {
-    for (rcounts_t::const_iterator i = rcounts.begin(); i != rcounts.end() && limit < 20; ++i, ++limit) {
-      ret << fmt % (-100.0 * i->first / total) % i->second.toString();
-      accounted += -i->first;
-    }
-    ret << '\n'
-        << fmt % (100.0 * (total - accounted) / total) % "rest";
+  unsigned int limit = 0;
+  unsigned int accounted = 0;
+  for (auto i = rcounts.rbegin(); i != rcounts.rend() && limit < 20; ++i, ++limit) {
+    ret << fmt % (100.0 * i->first / total) % i->second.toString();
+    accounted += i->first;
   }
+  ret << '\n'
+      << fmt % (100.0 * (total - accounted) / total) % "rest";
   return ret.str();
 }
 
@@ -1584,37 +1582,36 @@ static DNSName nopFilter(const DNSName& name)
   return name;
 }
 
-static string doGenericTopQueries(pleasequeryfunc_t func, std::function<DNSName(const DNSName&)> filter = nopFilter)
+static string doGenericTopQueries(const pleasequeryfunc_t& func, const std::function<DNSName(const DNSName&)>& filter = nopFilter)
 {
-  typedef pair<DNSName, uint16_t> query_t;
-  typedef map<query_t, int> counts_t;
-  counts_t counts;
-  vector<query_t> queries = broadcastAccFunction<vector<query_t>>(func);
-
-  unsigned int total = 0;
-  for (const query_t& q : queries) {
-    total++;
-    counts[pair(filter(q.first), q.second)]++;
+  using query_t = pair<DNSName, uint16_t>;
+  auto queries = broadcastAccFunction<vector<query_t>>(func);
+  const unsigned int total = queries.size();
+  if (total == 0) {
+    return "No qualifying data available\n";
   }
 
-  typedef std::multimap<int, query_t> rcounts_t;
-  rcounts_t rcounts;
+  map<query_t, unsigned int> counts;
+  for (const auto& query : queries) {
+    counts[pair(filter(query.first), query.second)]++;
+  }
 
-  for (auto&& c : counts)
-    rcounts.emplace(-c.second, c.first);
+  std::multimap<unsigned int, query_t> rcounts;
+  for (const auto& count : counts) {
+    rcounts.emplace(count.second, count.first);
+  }
 
   ostringstream ret;
   ret << "Over last " << total << " entries:\n";
   boost::format fmt("%.02f%%\t%s\n");
-  int limit = 0, accounted = 0;
-  if (total) {
-    for (rcounts_t::const_iterator i = rcounts.begin(); i != rcounts.end() && limit < 20; ++i, ++limit) {
-      ret << fmt % (-100.0 * i->first / total) % (i->second.first.toLogString() + "|" + DNSRecordContent::NumberToType(i->second.second));
-      accounted += -i->first;
-    }
-    ret << '\n'
-        << fmt % (100.0 * (total - accounted) / total) % "rest";
+  unsigned int limit = 0;
+  unsigned int accounted = 0;
+  for (auto i = rcounts.rbegin(); i != rcounts.rend() && limit < 20; ++i, ++limit) {
+    ret << fmt % (100.0 * i->first / total) % (i->second.first.toLogString() + "|" + DNSRecordContent::NumberToType(i->second.second));
+    accounted += i->first;
   }
+  ret << '\n'
+      << fmt % (100.0 * (total - accounted) / total) % "rest";
 
   return ret.str();
 }
@@ -1864,7 +1861,7 @@ static RecursorControlChannel::Answer help()
           "                                 remove netmasks that are not allowed to be throttled. If N is '*', remove all\n"
           "clear-nta [DOMAIN]...            Clear the Negative Trust Anchor for DOMAINs, if no DOMAIN is specified, remove all\n"
           "clear-ta [DOMAIN]...             Clear the Trust Anchor for DOMAINs\n"
-          "dump-cache <filename>            dump cache contents to the named file\n"
+          "dump-cache <filename> [type...]  dump cache contents to the named file, type is r, n, p or a\n"
           "dump-dot-probe-map <filename>    dump the contents of the DoT probe map to the named file\n"
           "dump-edns [status] <filename>    dump EDNS status to the named file\n"
           "dump-failedservers <filename>    dump the failed servers to the named file\n"
@@ -1886,14 +1883,15 @@ static RecursorControlChannel::Answer help()
           "                                 notice: queries from cache aren't being counted yet\n"
           "get-remotelogger-stats           get remote logger statistics\n"
           "hash-password [work-factor]      ask for a password then return the hashed version\n"
-          "help                             get this list\n"
+          "help                             get this list (from the running recursor)\n"
           "list-dnssec-algos                list supported DNSSEC algorithms\n"
           "ping                             check that all threads are alive\n"
           "quit                             stop the recursor daemon\n"
           "quit-nicely                      stop the recursor daemon nicely\n"
           "reload-acls                      reload ACLS\n"
           "reload-lua-script [filename]     (re)load Lua script\n"
-          "reload-lua-config [filename]     (re)load Lua configuration file\n"
+          "reload-yaml                      Reload runtime settable parts of YAML settings\n"
+          "reload-lua-config [filename]     (re)load Lua configuration file or equivalent YAML clauses\n"
           "reload-zones                     reload all auth and forward zones\n"
           "set-ecs-minimum-ttl value        set ecs-minimum-ttl-override\n"
           "set-max-aggr-nsec-cache-size value set new maximum aggressive NSEC cache size\n"
@@ -1917,7 +1915,7 @@ static RecursorControlChannel::Answer help()
           "top-servfail-remotes             show top remotes receiving servfail answers\n"
           "top-bogus-remotes                show top remotes receiving bogus answers\n"
           "unload-lua-script                unload Lua script\n"
-          "version                          return Recursor version number\n"
+          "version                          return version number of running Recursor\n"
           "wipe-cache domain0 [domain1] ..  wipe domain data from cache\n"
           "wipe-cache-typed type domain0 [domain1] ..  wipe domain data with qtype from cache\n"};
 }
@@ -1930,11 +1928,14 @@ RecursorControlChannel::Answer luaconfig(bool broadcast)
   extern std::unique_ptr<ProxyMapping> g_proxyMapping;
   if (!g_luaSettingsInYAML) {
     try {
+      if (::arg()["lua-config-file"].empty()) {
+        return {0, "No Lua or corresponding YAML configuration active\n"};
+      }
       loadRecursorLuaConfig(::arg()["lua-config-file"], proxyMapping, lci);
       activateLuaConfig(lci);
       lci = g_luaconfs.getCopy();
       if (broadcast) {
-        startLuaConfigDelayedThreads(lci.rpzs, lci.generation);
+        startLuaConfigDelayedThreads(lci, lci.generation);
         broadcastFunction([=] { return pleaseSupplantProxyMapping(proxyMapping); });
       }
       else {
@@ -1972,7 +1973,7 @@ RecursorControlChannel::Answer luaconfig(bool broadcast)
     activateLuaConfig(lci);
     lci = g_luaconfs.getCopy();
     if (broadcast) {
-      startLuaConfigDelayedThreads(lci.rpzs, lci.generation);
+      startLuaConfigDelayedThreads(lci, lci.generation);
       broadcastFunction([pmap = std::move(proxyMapping)] { return pleaseSupplantProxyMapping(pmap); });
     }
     else {
@@ -1995,7 +1996,7 @@ static RecursorControlChannel::Answer luaconfig(T begin, T end)
 {
   if (begin != end) {
     if (g_luaSettingsInYAML) {
-      return {1, "Unable to reload Lua script from '" + ::arg()["lua-config-file"] + " as there is no active Lua configuration\n"};
+      return {1, "Unable to reload Lua script from '" + *begin + "' as there is no active Lua configuration\n"};
     }
     ::arg().set("lua-config-file") = *begin;
   }
@@ -2116,6 +2117,9 @@ RecursorControlChannel::Answer RecursorControlParser::getAnswer(int socket, cons
     return doQueueReloadLuaScript(begin, end);
   }
   if (cmd == "reload-lua-config") {
+    return luaconfig(begin, end);
+  }
+  if (cmd == "reload-yaml") {
     return luaconfig(begin, end);
   }
   if (cmd == "set-carbon-server") {

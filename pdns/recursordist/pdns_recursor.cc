@@ -1558,7 +1558,7 @@ void startDoResolve(void* arg) // NOLINT(readability-function-cognitive-complexi
 
         if (t_protobufServers.servers) {
           // Max size is 64k, but we're conservative here, as other fields are added after the answers have been added
-          // If a single answer causes a too big protobuf message, it wil be dropped by queueData()
+          // If a single answer causes a too big protobuf message, it will be dropped by queueData()
           // But note addRR has code to prevent that
           if (pbMessage.size() < std::numeric_limits<uint16_t>::max() / 2) {
             pbMessage.addRR(record, luaconfsLocal->protobufExportConfig.exportTypes, udr);
@@ -1830,7 +1830,7 @@ void startDoResolve(void* arg) // NOLINT(readability-function-cognitive-complexi
 
     resolver.d_eventTrace.add(RecEventTrace::AnswerSent);
 
-    // Now do the per query changing part ot the protobuf message
+    // Now do the per query changing part of the protobuf message
     if (t_protobufServers.servers && !(luaconfsLocal->protobufExportConfig.taggedOnly && appliedPolicy.getName().empty() && comboWriter->d_policyTags.empty())) {
       // Below are the fields that are not stored in the packet cache and will be appended here and on a cache hit
       if (g_useKernelTimestamp && comboWriter->d_kernelTimestamp.tv_sec != 0) {
@@ -2014,9 +2014,8 @@ void startDoResolve(void* arg) // NOLINT(readability-function-cognitive-complexi
 }
 
 void getQNameAndSubnet(const std::string& question, DNSName* dnsname, uint16_t* qtype, uint16_t* qclass,
-                       bool& foundECS, EDNSSubnetOpts* ednssubnet, EDNSOptionViewMap* options)
+                       bool& foundECS, EDNSSubnetOpts* ednssubnet, EDNSOptionViewMap* options, boost::optional<uint32_t>& ednsVersion)
 {
-  const bool lookForECS = ednssubnet != nullptr;
   const dnsheader_aligned dnshead(question.data());
   const dnsheader* dhPointer = dnshead.get();
   size_t questionLen = question.length();
@@ -2027,7 +2026,7 @@ void getQNameAndSubnet(const std::string& question, DNSName* dnsname, uint16_t* 
   const size_t headerSize = /* root */ 1 + sizeof(dnsrecordheader);
   const uint16_t arcount = ntohs(dhPointer->arcount);
 
-  for (uint16_t arpos = 0; arpos < arcount && questionLen > (pos + headerSize) && (lookForECS && !foundECS); arpos++) {
+  for (uint16_t arpos = 0; arpos < arcount && questionLen >= (pos + headerSize) && !foundECS; arpos++) {
     if (question.at(pos) != 0) {
       /* not an OPT, bye. */
       return;
@@ -2035,6 +2034,11 @@ void getQNameAndSubnet(const std::string& question, DNSName* dnsname, uint16_t* 
 
     pos += 1;
     const auto* drh = reinterpret_cast<const dnsrecordheader*>(&question.at(pos)); // NOLINT(cppcoreguidelines-pro-type-reinterpret-cast)
+    if (ntohs(drh->d_type) == QType::OPT) {
+      uint32_t edns{};
+      memcpy(&edns, &drh->d_ttl, sizeof(edns)); // drh is not neccesarily aligned, so no uint32 assignment can be done
+      ednsVersion = edns;
+    }
     pos += sizeof(dnsrecordheader);
 
     if (pos >= questionLen) {
@@ -2042,7 +2046,7 @@ void getQNameAndSubnet(const std::string& question, DNSName* dnsname, uint16_t* 
     }
 
     /* OPT root label (1) followed by type (2) */
-    if (lookForECS && ntohs(drh->d_type) == QType::OPT) {
+    if (ntohs(drh->d_type) == QType::OPT) {
       if (options == nullptr) {
         size_t ecsStartPosition = 0;
         size_t ecsLen = 0;
@@ -2117,8 +2121,6 @@ bool checkForCacheHit(bool qnameParsed, unsigned int tag, const string& data,
       }
     }
 
-    t_Counters.at(rec::Counter::packetCacheHits)++;
-    t_Counters.at(rec::Counter::syncresqueries)++; // XXX
     if (response.length() >= sizeof(struct dnsheader)) {
       dnsheader_aligned dh_aligned(response.data());
       ageDNSPacket(response, age, dh_aligned);
@@ -2198,7 +2200,7 @@ static string* doProcessUDPQuestion(const std::string& question, const ComboAddr
   const dnsheader* dnsheader = headerdata.get();
   unsigned int ctag = 0;
   uint32_t qhash = 0;
-  bool needECS = false;
+  bool needEDNSParse = false;
   std::unordered_set<std::string> policyTags;
   std::map<std::string, RecursorLua4::MetaValue> meta;
   LuaContext::LuaObject data;
@@ -2214,7 +2216,7 @@ static string* doProcessUDPQuestion(const std::string& question, const ComboAddr
   const auto outgoingbExport = checkOutgoingProtobufExport(luaconfsLocal);
   if (pbExport || outgoingbExport) {
     if (pbExport) {
-      needECS = true;
+      needEDNSParse = true;
     }
     uniqueId = getUniqueID();
   }
@@ -2230,6 +2232,7 @@ static string* doProcessUDPQuestion(const std::string& question, const ComboAddr
   std::string extendedErrorExtra;
   boost::optional<int> rcode = boost::none;
   boost::optional<uint16_t> extendedErrorCode{boost::none};
+  boost::optional<uint32_t> ednsVersion{boost::none};
   uint32_t ttlCap = std::numeric_limits<uint32_t>::max();
   bool variable = false;
   bool followCNAMEs = false;
@@ -2252,14 +2255,14 @@ static string* doProcessUDPQuestion(const std::string& question, const ComboAddr
 #endif
 
     // We do not have a SyncRes specific Lua context at this point yet, so ok to use t_pdl
-    if (needECS || (t_pdl && (t_pdl->hasGettagFunc() || t_pdl->hasGettagFFIFunc())) || dnsheader->opcode == static_cast<unsigned>(Opcode::Notify)) {
+    if (needEDNSParse || (t_pdl && (t_pdl->hasGettagFunc() || t_pdl->hasGettagFFIFunc())) || dnsheader->opcode == static_cast<unsigned>(Opcode::Notify)) {
       try {
         EDNSOptionViewMap ednsOptions;
 
         ecsFound = false;
 
         getQNameAndSubnet(question, &qname, &qtype, &qclass,
-                          ecsFound, &ednssubnet, g_gettagNeedsEDNSOptions ? &ednsOptions : nullptr);
+                          ecsFound, &ednssubnet, g_gettagNeedsEDNSOptions ? &ednsOptions : nullptr, ednsVersion);
 
         qnameParsed = true;
         ecsParsed = true;
@@ -2297,7 +2300,7 @@ static string* doProcessUDPQuestion(const std::string& question, const ComboAddr
     RecursorPacketCache::OptPBData pbData{boost::none};
     if (t_protobufServers.servers) {
       if (logQuery && !(luaconfsLocal->protobufExportConfig.taggedOnly && policyTags.empty())) {
-        protobufLogQuery(luaconfsLocal, uniqueId, source, destination, mappedSource, ednssubnet.source, false, dnsheader->id, question.size(), qname, qtype, qclass, policyTags, requestorId, deviceId, deviceName, meta);
+        protobufLogQuery(luaconfsLocal, uniqueId, source, destination, mappedSource, ednssubnet.source, false, question.size(), qname, qtype, qclass, policyTags, requestorId, deviceId, deviceName, meta, ednsVersion, *dnsheader);
       }
     }
 
@@ -2395,7 +2398,7 @@ static string* doProcessUDPQuestion(const std::string& question, const ComboAddr
       SLOG(g_log << Logger::Notice << RecThreadInfo::id() << " got NOTIFY for " << qname.toLogString() << " from " << source.toStringWithPort() << (source != fromaddr ? " (via " + fromaddr.toStringWithPort() + ")" : "") << endl,
            g_slogudpin->info(Logr::Notice, "Got NOTIFY", "source", Logging::Loggable(source), "remote", Logging::Loggable(fromaddr), "qname", Logging::Loggable(qname)));
     }
-    if (!notifyRPZTracker(qname)) {
+    if (!ZoneXFR::notifyZoneTracker(qname)) {
       // It wasn't an RPZ
       requestWipeCaches(qname);
     }
@@ -2679,7 +2682,8 @@ static void handleNewUDPQuestion(int fileDesc, FDMultiplexer::funcparam_t& /* va
   t_Counters.updateSnap(g_regressionTestMode);
 }
 
-void makeUDPServerSockets(deferredAdd_t& deferredAdds, Logr::log_t log)
+// The two last arguments to makeUDPServerSockets are used for logging purposes only
+unsigned int makeUDPServerSockets(deferredAdd_t& deferredAdds, Logr::log_t log, bool doLog, unsigned int instances)
 {
   int one = 1;
   vector<string> localAddresses;
@@ -2768,9 +2772,11 @@ void makeUDPServerSockets(deferredAdd_t& deferredAdds, Logr::log_t log)
 
     deferredAdds.emplace_back(socketFd, handleNewUDPQuestion);
     g_listenSocketsAddresses[socketFd] = address; // this is written to only from the startup thread, not from the workers
-    SLOG(g_log << Logger::Info << "Listening for UDP queries on " << address.toStringWithPort() << endl,
-         log->info(Logr::Info, "Listening for queries", "proto", Logging::Loggable("UDP"), "address", Logging::Loggable(address)));
   }
+  if (doLog) {
+    log->info(Logr::Info, "Listening for queries", "proto", Logging::Loggable("UDP"), "addresses", Logging::IterLoggable(localAddresses.cbegin(), localAddresses.cend()), "socketInstances", Logging::Loggable(instances), "reuseport", Logging::Loggable(g_reusePort));
+  }
+  return localAddresses.size();
 }
 
 static bool trySendingQueryToWorker(unsigned int target, ThreadMSG* tmsg)

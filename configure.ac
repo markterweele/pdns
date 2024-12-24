@@ -88,7 +88,6 @@ AC_CHECK_HEADERS(
 AC_CHECK_HEADERS([sys/random.h])
 
 PDNS_WITH_LIBSODIUM
-PDNS_WITH_LIBDECAF
 PDNS_CHECK_LIBCRYPTO([
 ],[
    AC_MSG_ERROR([OpenSSL/libcrypto not found])
@@ -341,6 +340,19 @@ AS_IF([test "x$PACKAGEVERSION" != "x"],
 
 export moduledirs moduleobjects modulelibs
 
+AM_CONDITIONAL([BINDBACKEND_DYNMODULE],     [echo $dynmodules | grep -w bind])
+AM_CONDITIONAL([GEOIPBACKEND_DYNMODULE],    [echo $dynmodules | grep -w geoip])
+AM_CONDITIONAL([GMYSQLBACKEND_DYNMODULE],   [echo $dynmodules | grep -w gmysql])
+AM_CONDITIONAL([GODBCBACKEND_DYNMODULE],    [echo $dynmodules | grep -w godbc])
+AM_CONDITIONAL([GPGSQLBACKEND_DYNMODULE],   [echo $dynmodules | grep -w gpgsql])
+AM_CONDITIONAL([GSQLITE3BACKEND_DYNMODULE], [echo $dynmodules | grep -w gsqlite3])
+AM_CONDITIONAL([LDAPBACKEND_DYNMODULE],     [echo $dynmodules | grep -w ldap])
+AM_CONDITIONAL([LMDBBACKEND_DYNMODULE],     [echo $dynmodules | grep -w lmdb])
+AM_CONDITIONAL([LUA2BACKEND_DYNMODULE],     [echo $dynmodules | grep -w lua2])
+AM_CONDITIONAL([PIPEBACKEND_DYNMODULE],     [echo $dynmodules | grep -w pipe])
+AM_CONDITIONAL([REMOTEBACKEND_DYNMODULE],   [echo $dynmodules | grep -w remote])
+AM_CONDITIONAL([TINYDNSBACKEND_DYNMODULE],  [echo $dynmodules | grep -w tinydns])
+
 AC_CONFIG_FILES([
   Makefile
   modules/Makefile
@@ -404,11 +416,11 @@ AS_IF([test "x$libcrypto_ecdsa" = "xyes"],
   [AC_MSG_NOTICE([OpenSSL ecdsa: yes])],
   [AC_MSG_NOTICE([OpenSSL ecdsa: no])]
 )
-AS_IF([test "x$LIBSODIUM_LIBS" != "x" || test "x$LIBDECAF_LIBS" != "x" || test "x$libcrypto_ed25519" = "xyes"],
+AS_IF([test "x$LIBSODIUM_LIBS" != "x" || test "x$libcrypto_ed25519" = "xyes"],
   [AC_MSG_NOTICE([ed25519: yes])],
   [AC_MSG_NOTICE([ed25519: no])]
 )
-AS_IF([test "x$LIBDECAF_LIBS" != "x" || test "x$libcrypto_ed448" = "xyes"],
+AS_IF([test "x$libcrypto_ed448" = "xyes"],
   [AC_MSG_NOTICE([ed448: yes])],
   [AC_MSG_NOTICE([ed448: no])]
 )

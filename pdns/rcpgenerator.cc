@@ -335,7 +335,7 @@ void RecordTextReader::xfrSVCBValueList(vector<string> &val) {
   d_pos += ctr;
 }
 
-void RecordTextReader::xfrSvcParamKeyVals(set<SvcParam>& val)
+void RecordTextReader::xfrSvcParamKeyVals(set<SvcParam>& val) // NOLINT(readability-function-cognitive-complexity)
 {
   while (d_pos != d_end) {
     skipSpaces();
@@ -469,7 +469,13 @@ void RecordTextReader::xfrSvcParamKeyVals(set<SvcParam>& val)
         port = (v.at(0) << 8);
         port += v.at(1);
       } else {
-        xfr16BitInt(port);
+        string portstring;
+        xfrRFC1035CharString(portstring);
+        try {
+          pdns::checked_stoi_into(port, portstring);
+        } catch (const std::exception &e) {
+          throw RecordTextException(e.what());
+        }
       }
       val.insert(SvcParam(key, port));
       break;
@@ -540,8 +546,7 @@ static void HEXDecode(const char* begin, const char* end, string& out)
     }
   }
   if(mode)
-    out.append(1, (char) val);
-
+    throw RecordTextException("Hexadecimal blob with odd number of characters");
 }
 
 void RecordTextReader::xfrHexBlob(string& val, bool keepReading)

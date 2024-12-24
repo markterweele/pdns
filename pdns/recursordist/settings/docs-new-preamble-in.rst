@@ -16,7 +16,7 @@ Settings on the command line are processed after the file-based settings are pro
    if that fails, it will be processed as old-style configuration.
    Packages will stop installing a old-style ``recursor.conf`` file and start installing a default ``recursor.conf`` file containing YAML syntax.
 
-   With the release of 5.2.0, the default will be to expect a YAML configuration file and reading of old-style ``recursor.conf`` files will have to be enabled specifically by providing a command line option.
+   With the release of 5.2.0, the default will be to expect a YAML configuration file and reading of old-style ``recursor.conf`` files will have to be enabled specifically by providing a command line option ``--enable-old-settings``.
 
    In a future release support for the "old-style" ``recursor.conf`` settings file will be dropped.
 
@@ -25,6 +25,8 @@ Settings on the command line are processed after the file-based settings are pro
    The conversion printed by ``rec_control show-yaml`` will print these settings if a Lua config file is specified in the config file being converted.
    You have to choose however: either set Lua settings the old way in the Lua config file, or convert all to YAML.
    If you are using YAML settings of items originally specified in the Lua config file, do not set :ref:`setting-yaml-recursor.lua_config_file` anymore. The :program:`Recursor` will check that you do not mix both configuration methods.
+
+   When using YAML style for settings originally found in the Lua config file, ``rec_control reload-lua-config`` will reload parts of the YAML settings. Refer to the specific setting to learn if it is subject to reloading. Starting with version 5.2.0, the command ``rec_control reload-yaml`` can be used, which is an alias for ``rec_control reload-lua-config``.
 
 YAML settings file
 ------------------
@@ -383,6 +385,8 @@ As of version 5.1.0, an RPZ entry is defined as
     seedFile: string
 
 If ``addresses`` is empty, the ``name`` field specifies the path name of the RPZ, otherwise the ``name`` field defines the name of the RPZ.
+Starting with version 5.2.0, names instead of IP addresess can be used for ``addresses`` if
+:ref:`setting-yaml-recursor.system_resolver_ttl` is set.
 
 
 An example of an ``rpzs`` entry, which is a sequence of `RPZ`_:
@@ -471,6 +475,58 @@ An example of an ``proxymappings`` entry, which is a sequence of `ProxyMapping`_
        domains:
          - example.com
          - example.net
+
+ForwardingCatalogZone
+^^^^^^^^^^^^^^^^^^^^^
+As of version 5.2.0, a forwarding catalog zone entry is defined as:
+
+.. code-block:: yaml
+
+     zone: Name of catalog zone
+     notify_allowed: bool, default false
+     xfr:
+       addresses: [] Sequence of SocketAddress
+       zoneSizeHint: number, default not set
+       tsig:
+         name: string
+         algo: string
+         secret: base64string
+       refresh: number, default not set
+       maxReceivedMBytes: number, default not set
+       localAddress: IP address, default not set
+       axfrTimeout: number, default 20
+     groups:
+     - name: optional group name
+       forwarders: [] Sequence of SocketAddress
+       recurse: bool, default false
+       notify: bool, default false
+
+Names instead of IP addresess can be used for ``addresses`` if :ref:`setting-yaml-recursor.system_resolver_ttl` is set.
+An example of a :ref:`setting-yaml-recursor.forwarding_catalog_zones` entry, which is a sequence of `ForwardingCatalogZone`_:
+
+.. code-block:: yaml
+
+   forwarding_catalog_zones:
+   - zone: 'forward.example'
+     xfr:
+       addresses: [128.66.1.2]
+     groups:
+      - forwarders: [192.168.178.1] # default forwarder
+      - name: mygroup
+        forwarders: [192.168.179.2] # forwarder for catalog zone members in mygroup
+        recurse: true
+        notify_allowed: true
+   - zone: 'forward2.example'
+     xfr:
+       addresses: [128.66.1.3]
+     groups:
+      - forwarders: [192.168.178.3] # only default forwarder for 2nd catalog zone
+
+:program:`Recursor` will transfer the catalog zone from the authoritative server using IXFR (falling back to AXFR if needed) and add forwarding clauses for all members of the catalog zone.
+The forwarding parameters will be taken from the default group entry (the one without a name) defined in the YAML settings.
+For catalog zone members in a group, the forwarding parameters will be taken from the group entry with the corresponding name.
+
+The forwarding definitions will be written into a file ``$api_dir/catzone.$zonename``. :ref:`setting-yaml-webservice.api_dir` must be defined, the directory must exist and be writable by the :program:`Recursor` process.
 
 The YAML settings
 -----------------

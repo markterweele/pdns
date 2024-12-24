@@ -1,4 +1,4 @@
-@       86400   IN  SOA pdns-public-ns1.powerdns.com. peter\.van\.dijk.powerdns.com. 2024100401 10800 3600 604800 10800
+@       86400   IN  SOA pdns-public-ns1.powerdns.com. peter\.van\.dijk.powerdns.com. 2024121701 10800 3600 604800 10800
 @       3600    IN  NS  pdns-public-ns1.powerdns.com.
 @       3600    IN  NS  pdns-public-ns2.powerdns.com.
 
@@ -130,6 +130,7 @@ auth-4.9.0-beta2.security-status                        60 IN TXT "2 Unsupported
 auth-4.9.0.security-status                              60 IN TXT "1 OK"
 auth-4.9.1.security-status                              60 IN TXT "1 OK"
 auth-4.9.2.security-status                              60 IN TXT "1 OK"
+auth-4.9.3.security-status                              60 IN TXT "1 OK"
 
 ; Auth Debian
 auth-3.4.1-2.debian.security-status                     60 IN TXT "3 Upgrade now, see https://doc.powerdns.com/3/security/powerdns-advisory-2015-01/ and https://doc.powerdns.com/3/security/powerdns-advisory-2015-02/ and https://doc.powerdns.com/3/security/powerdns-advisory-2016-02/ and https://doc.powerdns.com/3/security/powerdns-advisory-2016-03/ and https://doc.powerdns.com/3/security/powerdns-advisory-2016-04/ and https://doc.powerdns.com/3/security/powerdns-advisory-2016-05/"
@@ -398,6 +399,10 @@ recursor-5.1.0-rc1.security-status                      60 IN TXT "3 Superseded 
 recursor-5.1.0.security-status                          60 IN TXT "3 Upgrade now, see https://doc.powerdns.com/recursor/security-advisories/powerdns-advisory-2024-04.html"
 recursor-5.1.1.security-status                          60 IN TXT "3 Upgrade now, see https://doc.powerdns.com/recursor/security-advisories/powerdns-advisory-2024-04.html"
 recursor-5.1.2.security-status                          60 IN TXT "1 OK"
+recursor-5.1.3.security-status                          60 IN TXT "1 OK"
+recursor-5.2.0-alpha1.security-status                   60 IN TXT "1 Unsupported pre-release"
+recursor-5.2.0-beta1.security-status                    60 IN TXT "1 Unsupported pre-release"
+recursor-5.2.0-rc1.security-status                      60 IN TXT "1 Unsupported pre-release"
 
 ; Recursor Debian
 recursor-3.6.2-2.debian.security-status                 60 IN TXT "3 Upgrade now, see https://doc.powerdns.com/3/security/powerdns-advisory-2015-01/ and https://doc.powerdns.com/3/security/powerdns-advisory-2016-02/"
@@ -572,3 +577,4 @@ dnsdist-1.9.4.security-status                              60 IN TXT "1 OK"
 dnsdist-1.9.5.security-status                              60 IN TXT "1 OK"
 dnsdist-1.9.6.security-status                              60 IN TXT "1 OK"
 dnsdist-1.9.7.security-status                              60 IN TXT "1 OK"
+dnsdist-1.9.8.security-status                              60 IN TXT "1 OK"

@@ -27,6 +27,8 @@
 #include "namespaces.hh"
 #include "noinitvector.hh"
 
+std::atomic<bool> DNSRecordContent::d_locked{false};
+
 UnknownRecordContent::UnknownRecordContent(const string& zone)
 {
   // parse the input
@@ -78,7 +80,7 @@ void UnknownRecordContent::toPacket(DNSPacketWriter& pw) const
   pw.xfrBlob(string(d_record.begin(),d_record.end()));
 }
 
-shared_ptr<DNSRecordContent> DNSRecordContent::deserialize(const DNSName& qname, uint16_t qtype, const string& serialized)
+shared_ptr<DNSRecordContent> DNSRecordContent::deserialize(const DNSName& qname, uint16_t qtype, const string& serialized, uint16_t qclass, bool internalRepresentation)
 {
   dnsheader dnsheader;
   memset(&dnsheader, 0, sizeof(dnsheader));
@@ -100,7 +102,7 @@ shared_ptr<DNSRecordContent> DNSRecordContent::deserialize(const DNSName& qname,
 
   struct dnsrecordheader drh;
   drh.d_type=htons(qtype);
-  drh.d_class=htons(QClass::IN);
+  drh.d_class=htons(qclass);
   drh.d_ttl=0;
   drh.d_clen=htons(serialized.size());
 
@@ -112,14 +114,15 @@ shared_ptr<DNSRecordContent> DNSRecordContent::deserialize(const DNSName& qname,
   }
 
   DNSRecord dr;
-  dr.d_class = QClass::IN;
+  dr.d_class = qclass;
   dr.d_type = qtype;
   dr.d_name = qname;
   dr.d_clen = serialized.size();
-  PacketReader pr(std::string_view(reinterpret_cast<const char*>(packet.data()), packet.size()), packet.size() - serialized.size() - sizeof(dnsrecordheader));
+  // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast): packet.data() is uint8_t *
+  PacketReader reader(std::string_view(reinterpret_cast<const char*>(packet.data()), packet.size()), packet.size() - serialized.size() - sizeof(dnsrecordheader), internalRepresentation);
   /* needed to get the record boundaries right */
-  pr.getDnsrecordheader(drh);
-  auto content = DNSRecordContent::make(dr, pr, Opcode::Query);
+  reader.getDnsrecordheader(drh);
+  auto content = DNSRecordContent::make(dr, reader, Opcode::Query);
   return content;
 }
 
@@ -663,7 +666,13 @@ void PacketReader::xfrSvcParamKeyVals(set<SvcParam> &kvs) {
         xfrCAWithoutPort(key, addr);
         addresses.push_back(addr);
       }
-      kvs.insert(SvcParam(key, std::move(addresses)));
+      // If there were no addresses, and the input comes from internal
+      // representation, we can reasonably assume this is the serialization
+      // of "auto".
+      bool doAuto{d_internal && len == 0};
+      auto param = SvcParam(key, std::move(addresses));
+      param.setAutoHint(doAuto);
+      kvs.insert(param);
       break;
     }
     case SvcParam::ech: {

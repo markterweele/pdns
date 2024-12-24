@@ -764,7 +764,6 @@ bool SyncRes::addAdditionals(QType qtype, vector<DNSRecord>& ret, unsigned int d
 int SyncRes::beginResolve(const DNSName& qname, const QType qtype, QClass qclass, vector<DNSRecord>& ret, unsigned int depth)
 {
   d_eventTrace.add(RecEventTrace::SyncRes);
-  t_Counters.at(rec::Counter::syncresqueries)++;
   d_wasVariable = false;
   d_wasOutOfBand = false;
   d_cutStates.clear();
@@ -1722,22 +1721,22 @@ int SyncRes::doResolve(const DNSName& qname, const QType qtype, vector<DNSRecord
   LOG(prefix << qname << ": doResolve" << endl);
 
   // Look in cache only
-  vector<DNSRecord> retq;
   bool old = setCacheOnly(true);
   bool fromCache = false;
   // For cache peeking, we tell doResolveNoQNameMinimization not to consider the (non-recursive) forward case.
   // Otherwise all queries in a forward domain will be forwarded, while we want to consult the cache.
-  int res = doResolveNoQNameMinimization(qname, qtype, retq, depth, beenthere, context, &fromCache, nullptr);
+  const auto retSizeBeforeCall = ret.size();
+  int res = doResolveNoQNameMinimization(qname, qtype, ret, depth, beenthere, context, &fromCache, nullptr);
   setCacheOnly(old);
   if (fromCache) {
     LOG(prefix << qname << ": Step0 Found in cache" << endl);
     if (d_appliedPolicy.d_type != DNSFilterEngine::PolicyType::None && (d_appliedPolicy.d_kind == DNSFilterEngine::PolicyKind::NXDOMAIN || d_appliedPolicy.d_kind == DNSFilterEngine::PolicyKind::NODATA)) {
       ret.clear();
     }
-    ret.insert(ret.end(), retq.begin(), retq.end());
-
     return res;
   }
+  // Erase unwanted cache lookup preliminary results in the returned records
+  ret.resize(retSizeBeforeCall);
   LOG(prefix << qname << ": Step0 Not cached" << endl);
 
   const unsigned int qnamelen = qname.countLabels();
@@ -1834,7 +1833,7 @@ int SyncRes::doResolve(const DNSName& qname, const QType qtype, vector<DNSRecord
       LOG(prefix << qname << ": Step4 Resolve A for child " << child << endl);
       bool oldFollowCNAME = d_followCNAME;
       d_followCNAME = false;
-      retq.resize(0);
+      vector<DNSRecord> retq;
       StopAtDelegation stopAtDelegation = Stop;
       res = doResolveNoQNameMinimization(child, QType::A, retq, depth, beenthere, context, nullptr, &stopAtDelegation);
       d_followCNAME = oldFollowCNAME;
@@ -1884,6 +1883,32 @@ unsigned int SyncRes::getAdjustedRecursionBound() const
     bound += s_maxdepth / 2;
   }
   return bound;
+}
+
+static bool haveFinalAnswer(const DNSName& qname, QType qtype, int res, const vector<DNSRecord>& ret)
+{
+  if (res != RCode::NoError) {
+    return false;
+  }
+
+  // This loop assumes the CNAME's records are in-order
+  DNSName target(qname);
+  for (const auto& record : ret) {
+    if (record.d_place == DNSResourceRecord::ANSWER && record.d_name == target) {
+      if (record.d_type == qtype) {
+        return true;
+      }
+      if (record.d_type == QType::CNAME) {
+        if (auto ptr = getRR<CNAMERecordContent>(record)) {
+          target = ptr->getTarget();
+        }
+        else {
+          return false;
+        }
+      }
+    }
+  }
+  return false;
 }
 
 /*! This function will check the cache and go out to the internet if the answer is not in cache
@@ -1987,6 +2012,11 @@ int SyncRes::doResolveNoQNameMinimization(const DNSName& qname, const QType qtyp
             }
           }
         }
+        // This handles the case mentioned above: if the full CNAME chain leading to the answer was
+        // constructed from the cache, indicate that.
+        if (fromCache != nullptr && !*fromCache && haveFinalAnswer(qname, qtype, res, ret)) {
+          *fromCache = true;
+        }
         return res;
       }
 
@@ -2036,7 +2066,9 @@ int SyncRes::doResolveNoQNameMinimization(const DNSName& qname, const QType qtyp
             }
           }
         }
-
+        if (fromCache != nullptr && !*fromCache && haveFinalAnswer(qname, qtype, res, ret)) {
+          *fromCache = true;
+        }
         return res;
       }
     }
@@ -4117,8 +4149,20 @@ vState SyncRes::validateRecordsWithSigs(unsigned int depth, const string& prefix
   }
 
   LOG(prefix << vStateToString(state) << "!" << endl);
+
+  bool skipThisLevelWhenLookingForMissedCuts = false;
+  if (name == qname && qtype == QType::DS && (type == QType::NSEC || type == QType::NSEC3)) {
+    /* so we have a NSEC(3) record likely proving that the DS we were looking for does not exist,
+       but we cannot validate it:
+       - if there actually is a cut at this level, we will not be able to validate it anyway
+       - if there is no cut at this level, the only thing that can save us is a cut above
+    */
+    LOG(prefix << name << ": We are trying to validate a " << type << " record for " << name << " likely proving that the DS we were initially looking for (" << qname << ") does not exist, no need to check a zone cut at this exact level" << endl);
+    skipThisLevelWhenLookingForMissedCuts = true;
+  }
+
   /* try again to get the missed cuts, harder this time */
-  auto zState = getValidationStatus(name, false, type == QType::DS, depth, prefix);
+  auto zState = getValidationStatus(name, false, type == QType::DS || skipThisLevelWhenLookingForMissedCuts, depth, prefix);
   LOG(prefix << name << ": Checking whether we missed a zone cut before returning a Bogus state" << endl);
   if (zState == vState::Secure) {
     /* too bad */
@@ -4875,7 +4919,7 @@ RCode::rcodes_ SyncRes::updateCacheFromRecords(unsigned int depth, const string&
 
     if (g_aggressiveNSECCache && (tCacheEntry->first.type == QType::NSEC || tCacheEntry->first.type == QType::NSEC3) && recordState == vState::Secure && !seenAuth.empty()) {
       // Good candidate for NSEC{,3} caching
-      g_aggressiveNSECCache->insertNSEC(seenAuth, tCacheEntry->first.name, tCacheEntry->second.records.at(0), tCacheEntry->second.signatures, tCacheEntry->first.type == QType::NSEC3);
+      g_aggressiveNSECCache->insertNSEC(seenAuth, tCacheEntry->first.name, tCacheEntry->second.records.at(0), tCacheEntry->second.signatures, tCacheEntry->first.type == QType::NSEC3, qname, qtype);
     }
 
     if (tCacheEntry->first.place == DNSResourceRecord::ANSWER && ednsmask) {

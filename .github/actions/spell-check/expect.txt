@@ -24,9 +24,10 @@ Aki
 Alenichev
 alexa
 algoroll
-alloca
+aliasmode
 allocs
 Altpeter
+andersbrownworth
 Anderton
 anewid
 anid
@@ -123,7 +124,6 @@ binlog
 bitfield
 bitmaps
 bla
-blackhole
 Bleker
 blockfilter
 blogpost
@@ -265,6 +265,7 @@ dataformat
 datatracker
 Daugaard
 Davids
+davidtmiller
 Dayneko
 dbfile
 dblacka
@@ -277,11 +278,8 @@ ddns
 ddos
 deactivatedomainkey
 debian
-deboynepollard
 Deduktiva
-dedup
 defcontent
-defmacro
 defpol
 defttl
 Dehaine
@@ -337,6 +335,7 @@ dnsquestion
 DNSR
 dnsrecord
 dnsreplay
+dnsresourcerecord
 dnsscan
 dnsscope
 dnssec
@@ -383,7 +382,6 @@ dynbpf
 dyndns
 dynhandler
 dynmodules
-eachother
 easydns
 ebpf
 ebpfblocklist
@@ -406,7 +404,6 @@ eldoc
 elgoog
 elisp
 elpa
-emacs
 endbr
 Enden
 enp
@@ -427,7 +424,6 @@ Exort
 externalrefs
 extrahead
 Exx
-Ezbu
 ezdns
 Faerch
 failedservers
@@ -492,6 +488,7 @@ Gerwin
 getaddrs
 getalldomainmetadata
 getbeforeandafternamesabsolute
+getbootstrap
 getcarbonhostname
 getdomaininfo
 getdomainkeys
@@ -505,7 +502,6 @@ gettag
 gettime
 gettsigkey
 Geuze
-GFm
 ggdb
 Ghz
 Gibheer
@@ -513,8 +509,6 @@ Gieben
 Gillstrom
 Gkey
 gmake
-Gmb
-gmtime
 GMy
 gmysql
 gmysqlbackend
@@ -531,6 +525,7 @@ gpgsqlbackend
 gprof
 gpsqlbackend
 grepq
+grpcs
 GSQ
 gsql
 gsqlite
@@ -614,7 +609,7 @@ ipencrypt
 ipfilter
 IPSECKEY
 iputils
-irc
+ironsummitmedia
 isane
 ismaster
 isoc
@@ -629,6 +624,7 @@ janeczku
 Jatko
 Jaury
 Jauvin
+jdebp
 Jeftovic
 Jelte
 Jermar
@@ -655,7 +651,6 @@ KEYBITS
 keyblock
 keydir
 keyids
-keymap
 keyname
 keypair
 keypairgen
@@ -717,36 +712,7 @@ Lesuisse
 lethalgroup
 letsencrypt
 letterpaper
-libatomic
-libclang
-libcrypto
-libcryptopp
-libdecaf
-libdir
-libedit
-libfstrm
-libgcc
-libgeoip
-libh
-libmaxminddb
-libmongo
-libmysqlclient
-libnss
-libpcap
-libpq
-libpqpp
-libresolv
-libressl
-librt
-libsettings
-libsodium
-libsofthsm
-libstdc
-libsystemd
-libtdsodbc
-libxdp
-libyaml
-libzmq
+LIBPQ
 lightningstream
 Lindqvist
 linenos
@@ -778,7 +744,6 @@ lowerroman
 Lrhazi
 lsock
 lsp
-lto
 luaaction
 luabackend
 luac
@@ -788,7 +753,6 @@ luarule
 luawrapper
 Lutter
 Luuk
-LYg
 Machard
 Maik
 Maikel
@@ -848,7 +812,6 @@ modeline
 modifyingpolicydecisions
 modindex
 monshouwer
-Moq
 motherboards
 mozilla
 mplexer
@@ -935,6 +898,7 @@ noncompliantqueries
 noncompliantresponses
 nonexist
 Nonnekes
+nonzone
 noout
 noping
 noport
@@ -954,14 +918,12 @@ NPTL
 NSes
 nsid
 nsis
-nsl
 nsrecord
 nsset
 nsspeeds
 NSTTL
 nsupdate
 nta
-ntlworld
 Nuitari
 NULs
 NUMA
@@ -985,7 +947,6 @@ Odintsov
 Oestreicher
 offsite
 oftc
-OIDs
 Olafur
 Omroep
 openapis
@@ -1004,16 +965,13 @@ oraclebackend
 ordername
 orsn
 Oservers
-OSX
 otherdomain
 otherpool
 ourname
 ourserial
-ourtime
 outpacket
 outputbuffer
 outqueries
-oxpedia
 PACKAGEVERSION
 packetcache
 packethandler
@@ -1092,6 +1050,7 @@ postresolve
 powerdnsrecursor
 powerdnssec
 powerldap
+pqpp
 Predota
 preoutquery
 Preproc
@@ -1099,15 +1058,11 @@ prepublishkeyroll
 prequery
 prerpz
 presignedness
-PRId
 primetime
-princ
 prioritization
 privs
 profdata
 profraw
-progn
-protobuf
 protozero
 providername
 proxymapping
@@ -1120,7 +1075,6 @@ ptrrecord
 Publieke
 publishdomainkey
 pullreq
-Pyry
 qclass
 qdcount
 qdomain
@@ -1140,7 +1094,6 @@ querycount
 querytime
 qytpe
 ragel
-raii
 Rak
 randombackend
 randombit
@@ -1150,6 +1103,7 @@ randomises
 randomloader
 rapidjson
 rawaddress
+rawtypes
 RBL
 rcode
 rcodezero
@@ -1183,6 +1137,7 @@ relbar
 relbarbgcolor
 relbarlinkcolor
 relbartextcolor
+reloadable
 relro
 Remco
 remi
@@ -1264,11 +1219,11 @@ segfault
 selectmplexer
 senderrors
 Sendetzky
-serde
 Sergey
 serverpools
 serverselection
 servfail
+servicemode
 setaffinity
 setcontent
 setdomainmetadata
@@ -1276,7 +1231,6 @@ seting
 setkey
 setnotified
 SETPIPE
-setq
 settting
 setvariable
 Shabanov
@@ -1318,7 +1272,6 @@ smn
 Smurthwaite
 Snarked
 sndbuf
-snprintf
 soa
 soadata
 soarecord
@@ -1333,7 +1286,7 @@ Soroceanu
 sortlist
 sourcecode
 SOURCEDIR
-sourceforge
+sourcelink
 sourceware
 Spaans
 Spackages
@@ -1357,6 +1310,7 @@ sshfp
 ssi
 SSQ
 stacksize
+startbootstrap
 starttransaction
 Stasic
 statbag
@@ -1364,6 +1318,7 @@ statbas
 statisticitem
 statm
 stbuehler
+stdc
 Stef
 Steinbuch
 stek
@@ -1382,7 +1337,7 @@ stubquery
 stubresolver
 Stussy
 stutiredboy
-subkey
+subkeys
 submitters
 subnamespace
 subnetmask
@@ -1424,6 +1379,7 @@ tcpout
 tcpreusedconnections
 tcptoomanyconcurrentconnections
 tds
+tdsodbc
 teeaction
 Telenet
 testsdir
@@ -1434,6 +1390,7 @@ Thessalonikefs
 Thiago
 thinko
 Thomassen
+Thorton
 threadmessage
 throttlemap
 thrysoee
@@ -1456,6 +1413,7 @@ todos
 toint
 tokenuser
 Tolstov
+tolua
 Toosarani
 Toshifumi
 totms
@@ -1482,7 +1440,6 @@ tunables
 Tuomi
 Tushuizen
 Tuxis
-TVJRU
 tylerneylon
 typenames
 ualberta
@@ -1528,7 +1485,6 @@ Vandalon
 vandergaast
 Vandoren
 Vasiliy
-VDz
 Veldhuyzen
 Verheijen
 Verschuren
@@ -1568,7 +1524,6 @@ Wielicki
 Wijk
 Wijnand
 Wijngaards
-wil
 wildcarded
 Willcott
 windr
@@ -1578,7 +1533,6 @@ wirelength
 Wisiol
 wmem
 Wojas
-workarounds
 Worldnic
 would've
 wouter
@@ -1626,6 +1580,7 @@ zeha
 Zengers
 Zengin
 zeromq
+zhaojs
 zilopbg
 zjs
 zonecryptokey

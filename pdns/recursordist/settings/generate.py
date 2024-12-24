@@ -47,6 +47,7 @@
 #            to handle old names when converting .conf to .yml
 #   skip-old: optional if this key is present, the field will be skipped in the old style settings.
 #   versionadded: string or list of strings
+#   runtime: optional, mentions how the settings can be updated runtime (or via API) if applicable
 #
 # The above struct will generate in cxxsettings-generated.cc:
 #
@@ -109,6 +110,7 @@ class LType(Enum):
     ListSubnets = auto()
     ListTrustAnchors = auto()
     ListZoneToCaches = auto()
+    ListForwardingCatalogZones = auto()
     String = auto()
     Uint64 = auto()
 
@@ -116,7 +118,7 @@ listOfStringTypes = (LType.ListSocketAddresses,  LType.ListStrings, LType.ListSu
 listOfStructuredTypes = (LType.ListAuthZones, LType.ListForwardZones, LType.ListTrustAnchors, LType.ListNegativeTrustAnchors,
                          LType.ListProtobufServers, LType.ListDNSTapFrameStreamServers, LType.ListDNSTapNODFrameStreamServers,
                          LType.ListSortLists, LType.ListRPZs, LType.ListZoneToCaches, LType.ListAllowedAdditionalQTypes,
-                         LType.ListProxyMappings)
+                         LType.ListProxyMappings, LType.ListForwardingCatalogZones)
 
 def get_olddoc_typename(typ):
     """Given a type from table.py, return the old-style type name"""
@@ -180,6 +182,8 @@ def get_newdoc_typename(typ):
         return 'Sequence of `AllowedAdditionalQType`_'
     if typ == LType.ListProxyMappings:
         return 'Sequence of `ProxyMapping`_'
+    if typ == LType.ListForwardingCatalogZones:
+        return 'Sequence of `ForwardingCatalogZone`_'
     return 'Unknown' + str(typ)
 
 def get_default_olddoc_value(typ, val):
@@ -406,7 +410,7 @@ def gen_rust_vec_default_functions(name, typeName, defvalue):
     ret = f'// DEFAULT HANDLING for {name}\n'
     ret += f'fn default_value_{name}() -> Vec<recsettings::{typeName}> {{\n'
     ret += f'    let msg = "default value defined for `{name}\' should be valid YAML";'
-    ret += f'    let deserialized: Vec<recsettings::{typeName}> = serde_yaml::from_str({quote(defvalue)}).expect(&msg);\n'
+    ret += f'    let deserialized: Vec<recsettings::{typeName}> = serde_yaml::from_str({quote(defvalue)}).expect(msg);\n'
     ret += f'    deserialized\n'
     ret += '}\n'
     ret += f'fn default_value_equal_{name}(value: &Vec<recsettings::{typeName}>)'
@@ -505,7 +509,7 @@ def write_rust_section(file, section, entries, default_funcs):
 
 #
 # Each section als has a Default implementation, so that a section with all entries having a default
-# value does not get generated into a yaml section. Such a tarit looks like:
+# value does not get generated into a yaml section. Such a trait looks like:
 #
 #impl Default for recsettings::ForwardZone {
 #    fn default() -> Self {
@@ -698,6 +702,16 @@ def gen_oldstyle_docs(srcdir, entries):
                 file.write('- YAML setting does not exist\n\n')
             else:
                 file.write(f"- YAML setting: :ref:`setting-yaml-{section}.{entry['name']}`\n\n")
+            if 'runtime' in entry:
+                runtime = entry['runtime']
+                if not isinstance(runtime, list):
+                    runtime = [runtime]
+                li = []
+                for v in runtime:
+                    if v == 'reload-yaml':
+                         continue
+                    li.append('``' + v + '``')
+                file.write(f"- Runtime modifiable using ``rec_control`` {', '.join(f'{w}' for w in li)}\n\n")
             file.write(entry['doc'].strip())
             file.write('\n\n')
 
@@ -755,6 +769,17 @@ def gen_newstyle_docs(srcdir, argentries):
                 file.write(f"- {entry['skip-old']}\n\n")
             else:
                 file.write(f"- Old style setting: :ref:`setting-{entry['oldname']}`\n\n")
+            if 'runtime' in entry:
+                runtime = entry['runtime']
+                if not isinstance(runtime, list):
+                    runtime = [runtime]
+                li = []
+                for v in runtime:
+                    vv = '``' + v + '``'
+                    if v == 'reload-yaml':
+                         vv = 'since 5.2.0: ' + vv
+                    li.append(vv)
+                file.write(f"- Runtime modifiable using ``rec_control`` {', '.join(f'{w}' for w in li)}\n\n")
             if 'doc-new' in entry:
                 file.write(fixxrefs(entries, entry['doc-new'].strip()))
             else:

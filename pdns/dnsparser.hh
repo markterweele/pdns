@@ -20,6 +20,7 @@
  * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
  */
 #pragma once
+#include <atomic>
 #include <map>
 #include <sstream>
 #include <stdexcept>
@@ -67,8 +68,8 @@ class MOADNSParser;
 class PacketReader
 {
 public:
-  PacketReader(const std::string_view& content, uint16_t initialPos=sizeof(dnsheader))
-    : d_pos(initialPos), d_startrecordpos(initialPos), d_content(content)
+  PacketReader(const std::string_view& content, uint16_t initialPos=sizeof(dnsheader), bool internalRepresentation = false)
+    : d_pos(initialPos), d_startrecordpos(initialPos), d_content(content), d_internal(internalRepresentation)
   {
     if(content.size() > std::numeric_limits<uint16_t>::max())
       throw std::out_of_range("packet too large");
@@ -185,6 +186,7 @@ private:
   uint16_t d_recordlen;      // ditto
   uint16_t not_used; // Aligns the whole class on 8-byte boundaries
   const std::string_view d_content;
+  bool d_internal;
 };
 
 struct DNSRecord;
@@ -224,8 +226,10 @@ public:
     return typeid(*this)==typeid(rhs) && this->getZoneRepresentation() == rhs.getZoneRepresentation();
   }
 
-  // parse the content in wire format, possibly including compressed pointers pointing to the owner name
-  static shared_ptr<DNSRecordContent> deserialize(const DNSName& qname, uint16_t qtype, const string& serialized);
+  // parse the content in wire format, possibly including compressed pointers pointing to the owner name.
+  // internalRepresentation is set when the data comes from an internal source,
+  // such as the LMDB backend.
+  static shared_ptr<DNSRecordContent> deserialize(const DNSName& qname, uint16_t qtype, const string& serialized, uint16_t qclass=QClass::IN, bool internalRepresentation = false);
 
   void doRecordCheck(const struct DNSRecord&){}
 
@@ -234,6 +238,7 @@ public:
 
   static void regist(uint16_t cl, uint16_t ty, makerfunc_t* f, zmakerfunc_t* z, const char* name)
   {
+    assert(!d_locked.load()); // NOLINT: it's the API
     if(f)
       getTypemap()[pair(cl,ty)]=f;
     if(z)
@@ -241,13 +246,6 @@ public:
 
     getT2Namemap().emplace(pair(cl, ty), name);
     getN2Typemap().emplace(name, pair(cl, ty));
-  }
-
-  static void unregist(uint16_t cl, uint16_t ty)
-  {
-    auto key = pair(cl, ty);
-    getTypemap().erase(key);
-    getZmakermap().erase(key);
   }
 
   static bool isUnknownType(const string& name)
@@ -284,6 +282,11 @@ public:
 
   virtual uint16_t getType() const = 0;
 
+  static void lock()
+  {
+    d_locked.store(true);
+  }
+
 protected:
   typedef std::map<std::pair<uint16_t, uint16_t>, makerfunc_t* > typemap_t;
   typedef std::map<std::pair<uint16_t, uint16_t>, zmakerfunc_t* > zmakermap_t;
@@ -293,6 +296,7 @@ protected:
   static t2namemap_t& getT2Namemap();
   static n2typemap_t& getN2Typemap();
   static zmakermap_t& getZmakermap();
+  static std::atomic<bool> d_locked;
 };
 
 struct DNSRecord

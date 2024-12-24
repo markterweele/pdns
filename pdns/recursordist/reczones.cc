@@ -65,29 +65,6 @@ bool primeHints(time_t now)
   return ret;
 }
 
-static ComboAddress fromNameOrIP(const string& str, uint16_t defPort, Logr::log_t log)
-{
-  try {
-    ComboAddress addr = parseIPAndPort(str, defPort);
-    return addr;
-  }
-  catch (const PDNSException&) {
-    uint16_t port = defPort;
-    string::size_type pos = str.rfind(':');
-    if (pos != string::npos) {
-      port = pdns::checked_stoi<uint16_t>(str.substr(pos + 1));
-    }
-    auto& res = pdns::RecResolve::getInstance();
-    ComboAddress address = res.lookupAndRegister(str.substr(0, pos), time(nullptr));
-    if (address != ComboAddress()) {
-      address.setPort(port);
-      return address;
-    }
-    log->error(Logr::Error, "Could not resolve name", "name", Logging::Loggable(str));
-    throw PDNSException("Could not resolve " + str);
-  }
-}
-
 static void convertServersForAD(const std::string& zone, const std::string& input, SyncRes::AuthDomain& authDomain, const char* sepa, Logr::log_t log, bool verbose = true)
 {
   vector<string> servers;
@@ -96,7 +73,7 @@ static void convertServersForAD(const std::string& zone, const std::string& inpu
 
   vector<string> addresses;
   for (auto& server : servers) {
-    ComboAddress addr = fromNameOrIP(server, 53, log);
+    ComboAddress addr = pdns::fromNameOrIP(server, 53, log);
     authDomain.d_servers.push_back(addr);
     if (verbose) {
       addresses.push_back(addr.toStringWithPort());
@@ -313,12 +290,12 @@ static void processForwardZones(shared_ptr<SyncRes::domainmap_t>& newMap, Logr::
   }
 }
 
-static void processApiZonesFile(shared_ptr<SyncRes::domainmap_t>& newMap, shared_ptr<notifyset_t>& newSet, Logr::log_t log)
+static void processApiZonesFile(const string& file, shared_ptr<SyncRes::domainmap_t>& newMap, shared_ptr<notifyset_t>& newSet, Logr::log_t log)
 {
   if (::arg()["api-config-dir"].empty()) {
     return;
   }
-  const auto filename = ::arg()["api-config-dir"] + "/apizones";
+  const auto filename = ::arg()["api-config-dir"] + "/" + file;
   struct stat statStruct
   {
   };
@@ -340,7 +317,7 @@ static void processApiZonesFile(shared_ptr<SyncRes::domainmap_t>& newMap, shared
     authDomain.d_name = DNSName(string(forward.zone));
     authDomain.d_rdForward = forward.recurse;
     for (const auto& forwarder : forward.forwarders) {
-      ComboAddress addr = parseIPAndPort(string(forwarder), 53);
+      ComboAddress addr = pdns::fromNameOrIP(string(forwarder), 53, log);
       authDomain.d_servers.emplace_back(addr);
     }
     (*newMap)[authDomain.d_name] = authDomain;
@@ -378,7 +355,7 @@ static void processForwardZonesFile(shared_ptr<SyncRes::domainmap_t>& newMap, sh
       authDomain.d_name = DNSName(string(forward.zone));
       authDomain.d_rdForward = forward.recurse;
       for (const auto& forwarder : forward.forwarders) {
-        ComboAddress addr = parseIPAndPort(string(forwarder), 53);
+        ComboAddress addr = pdns::fromNameOrIP(string(forwarder), 53, log);
         authDomain.d_servers.emplace_back(addr);
       }
       (*newMap)[authDomain.d_name] = authDomain;
@@ -593,16 +570,17 @@ std::tuple<std::shared_ptr<SyncRes::domainmap_t>, std::shared_ptr<notifyset_t>> 
 {
   auto log = g_slog->withName("config");
 
-  TXTRecordContent::report();
-  OPTRecordContent::report();
-
   auto newMap = std::make_shared<SyncRes::domainmap_t>();
   auto newSet = std::make_shared<notifyset_t>();
 
   processForwardZones(newMap, log);
   processForwardZonesFile(newMap, newSet, log);
   if (yaml) {
-    processApiZonesFile(newMap, newSet, log);
+    auto lci = g_luaconfs.getLocal();
+    processApiZonesFile("apizones", newMap, newSet, log);
+    for (const auto& catz : lci->catalogzones) {
+      processApiZonesFile("catzone." + catz.d_catz->getName().toString(), newMap, newSet, log);
+    }
   }
   processExportEtcHosts(newMap, log);
   processServeRFC1918(newMap, log);

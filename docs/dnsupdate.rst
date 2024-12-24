@@ -275,9 +275,9 @@ Kdhcpdupdate.*.private). You're interested in the .key file:
     dhcpdupdate. IN KEY 0 3 157 FYhvwsW1ZtFZqWzsMpqhbg==
 
 The important bits are the name of the key (**dhcpdupdate**) and the
-hash of the key (**FYhvwsW1ZtFZqWzsMpqhbg==**
+hash of the key (**FYhvwsW1ZtFZqWzsMpqhbg==**)
 
-Using the details from the key you've just generated. Add the following
+Using the details from the freshly generated key, add the following
 to your dhcpd.conf:
 
 ::
@@ -338,10 +338,10 @@ configuration file.
 Setting up PowerDNS
 ~~~~~~~~~~~~~~~~~~~
 
-A number of small changes are needed to powerdns to make it accept
+A number of small changes are needed to PowerDNS to make it accept
 dynamic updates from **dhcpd**.
 
-Enabled DNS update (:rfc:`2136`) support functionality in PowerDNS by adding
+Enable DNS update (:rfc:`2136`) support functionality in PowerDNS by adding
 the following to the PowerDNS configuration file (pdns.conf).
 
 .. code-block:: ini
@@ -351,10 +351,10 @@ the following to the PowerDNS configuration file (pdns.conf).
 
 This tells PowerDNS to:
 
-1. Enable DNS update support(:ref:`setting-dnsupdate`)
+1. Enable DNS update support (:ref:`setting-dnsupdate`)
 2. Allow updates from NO ip-address (":ref:`setting-allow-dnsupdate-from`\ =")
 
-We just told powerdns (via the configuration file) that we accept
+We just told PowerDNS (via the configuration file) that we accept
 updates from nobody via the :ref:`setting-allow-dnsupdate-from`
 parameter. That's not very useful, so we're going to give permissions
 per zone (including the appropriate reverse zone), via the
@@ -421,7 +421,7 @@ PowerDNS.
 11. The prerequisite checks are performed (section 3.2 of :rfc:`2136 <2136#section-3.2>`). If a
     check fails, the corresponding RCode is returned. No further
     processing will happen.
-12. Per record in the update message, a the prescan checks are
+12. Per record in the update message, the prescan checks are
     performed. If the prescan fails, the corresponding RCode is
     returned. If the prescan for the record is correct, the actual
     update/delete/modify of the record is performed. If the update fails
