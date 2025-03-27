@@ -50,9 +50,7 @@ bool resolversDefined()
  */
 static void parseLocalResolvConf_locked(vector<ComboAddress>& resolversForStub, const time_t& now)
 {
-  struct stat statResult
-  {
-  };
+  struct stat statResult{};
   s_localResolvConfLastCheck = now;
 
   if (stat(LOCAL_RESOLV_CONF_PATH, &statResult) != -1) {
@@ -131,7 +129,7 @@ int stubDoResolve(const DNSName& qname, uint16_t qtype, vector<DNSZoneRecord>& r
 
   if (d_eso != nullptr) {
     // pass along EDNS subnet from client if given - issue #5469
-    string origECSOptionStr = makeEDNSSubnetOptsString(*d_eso);
+    string origECSOptionStr = d_eso->makeOptString();
     DNSPacketWriter::optvect_t opts;
     opts.emplace_back(EDNSOptionCode::ECS, origECSOptionStr);
     packetWriter.addOpt(512, 0, 0, opts);
@@ -159,9 +157,7 @@ int stubDoResolve(const DNSName& qname, uint16_t qtype, vector<DNSZoneRecord>& r
     retry:
       sock.read(reply); // this calls recv
       if (reply.size() > sizeof(struct dnsheader)) {
-        struct dnsheader dHeader
-        {
-        };
+        struct dnsheader dHeader{};
         memcpy(&dHeader, reply.c_str(), sizeof(dHeader));
         if (dHeader.id != packetWriter.getHeader()->id) {
           goto retry;

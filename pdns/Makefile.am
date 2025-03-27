@@ -180,7 +180,7 @@ EXTRA_PROGRAMS = \
 	sdig \
 	speedtest \
 	testrunner \
-	tsig-tests \
+	tsig_tests \
 	zone2ldap
 
 pdns_server_SOURCES = \
@@ -540,6 +540,7 @@ sdig_SOURCES = \
 	dnsrecords.cc \
 	dnswriter.cc dnswriter.hh \
 	dolog.hh \
+	ednscookies.cc ednscookies.hh \
 	ednsextendederror.cc ednsextendederror.hh \
 	ednssubnet.cc iputils.cc \
 	libssl.cc libssl.hh \
@@ -578,11 +579,11 @@ sdig_CPPFLAGS += $(LIBSSL_CFLAGS)
 sdig_LDADD += $(LIBSSL_LIBS)
 endif
 
+endif
+
 if LIBSODIUM
 sdig_CPPFLAGS +=$(LIBSODIUM_CFLAGS)
 sdig_LDADD += $(LIBSODIUM_LIBS)
-endif
-
 endif
 
 calidns_SOURCES = \
@@ -930,6 +931,10 @@ tsig_tests_SOURCES += pkcs11signers.cc pkcs11signers.hh
 tsig_tests_LDADD += $(P11KIT1_LIBS)
 endif
 
+if GSS_TSIG
+tsig_tests_LDADD += $(GSS_LIBS)
+endif
+
 speedtest_SOURCES = \
 	arguments.cc arguments.hh \
 	base32.cc \
@@ -949,6 +954,7 @@ speedtest_SOURCES = \
 	nsecrecords.cc \
 	qtype.cc \
 	rcpgenerator.cc rcpgenerator.hh \
+	shuffle.cc shuffle.hh \
 	sillyrecords.cc \
 	speedtest.cc \
 	statbag.cc \
@@ -1508,7 +1514,7 @@ pdns_control_LDFLAGS = \
        $(AM_LDFLAGS) \
        $(LIBCRYPTO_LDFLAGS)
 
-noinst_PROGRAMS = speedtest
+noinst_PROGRAMS = speedtest tsig_tests
 
 if UNIT_TESTS
 noinst_PROGRAMS += testrunner

@@ -1,6 +1,18 @@
 Upgrade Guide
 =============
 
+1.9.x to 2.0.0
+--------------
+
+:program:`dnsdist` supports a new, optional ``yaml`` :doc:`configuration format <reference/yaml-settings>`. To build :program:`dnsdist` with this feature enabled, a Rust compiler and a Python 3 interpreter are needed.
+
+:func:`showTLSContexts` has been renamed to :func:`showTLSFrontends`.
+:func:`getTLSContext` and the associated :class:`TLSContext` have been removed, please use :func:`getTLSFrontend` and the associated :class:`TLSFrontend` instead.
+
+Our eBPF filtering code no longer treats the ``255``/``ANY`` qtype as a special value intended to block queries for all types, and will only block ``ANY`` queries instead. The reserved ``65535`` value now can be used to block queries for all qtypes.
+
+XPF support has been removed.
+
 1.8.x to 1.9.0
 --------------
 

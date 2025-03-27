@@ -60,6 +60,7 @@
 #include <pwd.h>
 #include <grp.h>
 #include <climits>
+#include <unordered_map>
 #ifdef __FreeBSD__
 #  include <pthread_np.h>
 #endif
@@ -568,7 +569,7 @@ std::string getCarbonHostName()
     throw std::runtime_error(stringerror());
   }
 
-  boost::replace_all(*hostname, ".", "_");
+  std::replace(hostname->begin(), hostname->end(), '.', '_');
   return *hostname;
 }
 
@@ -630,15 +631,16 @@ string U32ToIP(uint32_t val)
 }
 
 
-string makeHexDump(const string& str)
+string makeHexDump(const string& str, const string& sep)
 {
   std::array<char, 5> tmp;
   string ret;
-  ret.reserve(static_cast<size_t>(str.size()*2.2));
+  ret.reserve(static_cast<size_t>(str.size() * (2 + sep.size())));
 
   for (char n : str) {
-    snprintf(tmp.data(), tmp.size(), "%02x ", static_cast<unsigned char>(n));
+    snprintf(tmp.data(), tmp.size(), "%02x", static_cast<unsigned char>(n));
     ret += tmp.data();
+    ret += sep;
   }
   return ret;
 }
@@ -727,6 +729,62 @@ int logFacilityToLOG(unsigned int facility)
   default:
     return -1;
   }
+}
+
+std::optional<int> logFacilityFromString(std::string facilityStr)
+{
+  static std::unordered_map<std::string, int> const s_facilities = {
+    {"local0", LOG_LOCAL0},
+    {"log_local0", LOG_LOCAL0},
+    {"local1", LOG_LOCAL1},
+    {"log_local1", LOG_LOCAL1},
+    {"local2", LOG_LOCAL2},
+    {"log_local2", LOG_LOCAL2},
+    {"local3", LOG_LOCAL3},
+    {"log_local3", LOG_LOCAL3},
+    {"local4", LOG_LOCAL4},
+    {"log_local4", LOG_LOCAL4},
+    {"local5", LOG_LOCAL5},
+    {"log_local5", LOG_LOCAL5},
+    {"local6", LOG_LOCAL6},
+    {"log_local6", LOG_LOCAL6},
+    {"local7", LOG_LOCAL7},
+    {"log_local7", LOG_LOCAL7},
+    /* most of these likely make very little sense
+       for us, but why not? */
+    {"kern", LOG_KERN},
+    {"log_kern", LOG_KERN},
+    {"user", LOG_USER},
+    {"log_user", LOG_USER},
+    {"mail", LOG_MAIL},
+    {"log_mail", LOG_MAIL},
+    {"daemon", LOG_DAEMON},
+    {"log_daemon", LOG_DAEMON},
+    {"auth", LOG_AUTH},
+    {"log_auth", LOG_AUTH},
+    {"syslog", LOG_SYSLOG},
+    {"log_syslog", LOG_SYSLOG},
+    {"lpr", LOG_LPR},
+    {"log_lpr", LOG_LPR},
+    {"news", LOG_NEWS},
+    {"log_news", LOG_NEWS},
+    {"uucp", LOG_UUCP},
+    {"log_uucp", LOG_UUCP},
+    {"cron", LOG_CRON},
+    {"log_cron", LOG_CRON},
+    {"authpriv", LOG_AUTHPRIV},
+    {"log_authpriv", LOG_AUTHPRIV},
+    {"ftp", LOG_FTP},
+    {"log_ftp", LOG_FTP}
+  };
+
+  toLowerInPlace(facilityStr);
+  auto facilityIt = s_facilities.find(facilityStr);
+  if (facilityIt == s_facilities.end()) {
+    return std::nullopt;
+  }
+
+  return facilityIt->second;
 }
 
 string stripDot(const string& dom)

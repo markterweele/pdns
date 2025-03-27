@@ -8,6 +8,7 @@
 #include <cerrno>
 #include <iostream>
 #include <thread>
+#include <string_view>
 
 #include <boost/algorithm/string.hpp>
 #include <h2o.h>
@@ -29,7 +30,6 @@
 #include "dnsdist-ecs.hh"
 #include "dnsdist-metrics.hh"
 #include "dnsdist-proxy-protocol.hh"
-#include "dnsdist-rules.hh"
 #include "libssl.hh"
 #include "threadname.hh"
 
@@ -56,7 +56,7 @@
 */
 
 /* 'Intermediate' compatibility from https://wiki.mozilla.org/Security/Server_Side_TLS#Intermediate_compatibility_.28default.29 */
-static constexpr string_view DOH_DEFAULT_CIPHERS = "ECDHE-ECDSA-CHACHA20-POLY1305:ECDHE-RSA-CHACHA20-POLY1305:ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256:ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384:DHE-RSA-AES128-GCM-SHA256:DHE-RSA-AES256-GCM-SHA384:ECDHE-ECDSA-AES128-SHA256:ECDHE-RSA-AES128-SHA256:ECDHE-ECDSA-AES128-SHA:ECDHE-RSA-AES256-SHA384:ECDHE-RSA-AES128-SHA:ECDHE-ECDSA-AES256-SHA384:ECDHE-ECDSA-AES256-SHA:ECDHE-RSA-AES256-SHA:DHE-RSA-AES128-SHA256:DHE-RSA-AES128-SHA:DHE-RSA-AES256-SHA256:DHE-RSA-AES256-SHA:ECDHE-ECDSA-DES-CBC3-SHA:ECDHE-RSA-DES-CBC3-SHA:EDH-RSA-DES-CBC3-SHA:AES128-GCM-SHA256:AES256-GCM-SHA384:AES128-SHA256:AES256-SHA256:AES128-SHA:AES256-SHA:DES-CBC3-SHA:!DSS";
+static constexpr std::string_view DOH_DEFAULT_CIPHERS = "ECDHE-ECDSA-CHACHA20-POLY1305:ECDHE-RSA-CHACHA20-POLY1305:ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256:ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384:DHE-RSA-AES128-GCM-SHA256:DHE-RSA-AES256-GCM-SHA384:ECDHE-ECDSA-AES128-SHA256:ECDHE-RSA-AES128-SHA256:ECDHE-ECDSA-AES128-SHA:ECDHE-RSA-AES256-SHA384:ECDHE-RSA-AES128-SHA:ECDHE-ECDSA-AES256-SHA384:ECDHE-ECDSA-AES256-SHA:ECDHE-RSA-AES256-SHA:DHE-RSA-AES128-SHA256:DHE-RSA-AES128-SHA:DHE-RSA-AES256-SHA256:DHE-RSA-AES256-SHA:ECDHE-ECDSA-DES-CBC3-SHA:ECDHE-RSA-DES-CBC3-SHA:EDH-RSA-DES-CBC3-SHA:AES128-GCM-SHA256:AES256-GCM-SHA384:AES128-SHA256:AES256-SHA256:AES128-SHA:AES256-SHA:DES-CBC3-SHA:!DSS";
 
 class DOHAcceptContext
 {
@@ -485,6 +485,7 @@ public:
 
   void handleResponse(const struct timeval& now, TCPResponse&& response) override
   {
+    (void)now;
     if (!response.d_idstate.du) {
       return;
     }
@@ -546,6 +547,7 @@ public:
 
   void notifyIOError(const struct timeval& now, TCPResponse&& response) override
   {
+    (void)now;
     auto& query = response.d_idstate;
     if (!query.du) {
       return;
@@ -856,6 +858,7 @@ static void processDOHQuery(DOHUnitUniquePtr&& unit, bool inMainThread = false)
 /* called when a HTTP response is about to be sent, from the main DoH thread */
 static void on_response_ready_cb(struct st_h2o_filter_t *self, h2o_req_t *req, h2o_ostream_t **slot)
 {
+  (void)self;
   if (req == nullptr) {
     return;
   }
@@ -1145,8 +1148,8 @@ static int doh_handler(h2o_handler_t *self, h2o_req_t *req)
       if (pos != string::npos) {
         // need to base64url decode this
         string sdns(path.substr(pos+5));
-        boost::replace_all(sdns,"-", "+");
-        boost::replace_all(sdns,"_", "/");
+        std::replace(sdns.begin(), sdns.end(), '-', '+');
+        std::replace(sdns.begin(), sdns.end(), '_', '/');
         // re-add padding that may have been missing
         switch (sdns.size() % 4) {
         case 2:
@@ -1294,6 +1297,7 @@ static void dnsdistclient(pdns::channel::Receiver<DOHUnit>&& receiver)
    */
 static void on_dnsdist(h2o_socket_t *listener, const char *err)
 {
+  (void)err;
   /* we want to read as many responses from the pipe as possible before
      giving up. Even if we are overloaded and fighting with the DoH connections
      for the CPU, the first thing we need to do is to send responses to free slots

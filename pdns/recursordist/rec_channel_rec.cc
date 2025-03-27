@@ -40,7 +40,7 @@
 #include "rec-main.hh"
 #include "rec-system-resolve.hh"
 
-#include "settings/cxxsettings.hh"
+#include "rec-rust-lib/cxxsettings.hh"
 
 /* g++ defines __SANITIZE_THREAD__
    clang++ supports the nice __has_feature(thread_sanitizer),
@@ -90,7 +90,6 @@ bool PrefixDashNumberCompare::operator()(const std::string& a, const std::string
   return aa < bb;
 }
 
-static map<string, const uint32_t*> d_get32bitpointers;
 static map<string, const pdns::stat_t*> d_getatomics;
 static map<string, std::function<uint64_t()>> d_get64bitmembers;
 static map<string, std::function<StatsMap()>> d_getmultimembers;
@@ -122,14 +121,6 @@ void disableStats(StatComponent component, const string& stats)
   auto& map = s_disabledStats[component];
   for (const auto& st : disabledStats) {
     map.insert(st);
-  }
-}
-
-static void addGetStat(const string& name, const uint32_t* place)
-{
-  if (!d_get32bitpointers.emplace(name, place).second) {
-    cerr << "addGetStat: double def " << name << endl;
-    _exit(1);
   }
 }
 
@@ -190,12 +181,12 @@ static std::optional<uint64_t> get(const string& name)
 {
   std::optional<uint64_t> ret;
 
-  if (d_get32bitpointers.count(name))
-    return *d_get32bitpointers.find(name)->second;
-  if (d_getatomics.count(name))
+  if (d_getatomics.count(name) != 0) {
     return d_getatomics.find(name)->second->load();
-  if (d_get64bitmembers.count(name))
+  }
+  if (d_get64bitmembers.count(name) != 0) {
     return d_get64bitmembers.find(name)->second();
+  }
 
   {
     auto dm = d_dynmetrics.lock();
@@ -226,11 +217,6 @@ StatsMap getAllStatsMap(StatComponent component)
   StatsMap ret;
   const auto& disabledlistMap = s_disabledStats.at(component);
 
-  for (const auto& the32bits : d_get32bitpointers) {
-    if (disabledlistMap.count(the32bits.first) == 0) {
-      ret.emplace(the32bits.first, StatsMapEntry{getPrometheusName(the32bits.first), std::to_string(*the32bits.second)});
-    }
-  }
   for (const auto& atomic : d_getatomics) {
     if (disabledlistMap.count(atomic.first) == 0) {
       ret.emplace(atomic.first, StatsMapEntry{getPrometheusName(atomic.first), std::to_string(atomic.second->load())});
@@ -1373,13 +1359,13 @@ static auto clearLuaScript()
   return doQueueReloadLuaScript(empty.begin(), empty.end());
 }
 
-void doExitGeneric(bool nicely)
+// This code SHOUD *NOT* BE CALLED BY SIGNAL HANDLERS anymore
+static void doExitGeneric(bool nicely)
 {
 #if defined(__SANITIZE_THREAD__)
   _exit(0); // regression test check for exit 0
 #endif
-  g_log << Logger::Error << "Exiting on user request" << endl;
-  g_rcc.~RecursorControlChannel();
+  g_slog->withName("runtime")->info(Logr::Notice, "Exiting on user request", "nicely", Logging::Loggable(nicely));
 
   if (!g_pidfname.empty()) {
     unlink(g_pidfname.c_str()); // we can at least try..
@@ -1387,8 +1373,16 @@ void doExitGeneric(bool nicely)
 
   if (nicely) {
     RecursorControlChannel::stop = true;
+    {
+      std::unique_lock lock(g_doneRunning.mutex);
+      g_doneRunning.condVar.wait(lock, [] { return g_doneRunning.done.load(); });
+    }
+    // g_rcc.~RecursorControlChannel() do not call, caller still needs it!
+    // Caller will continue doing the orderly shutdown
   }
   else {
+    // rec_control quit case. Is that still used by test code? bulktests and regression test use quit-nicely
+    g_rcc.~RecursorControlChannel();
 #if defined(__SANITIZE_ADDRESS__) && defined(HAVE_LEAK_SANITIZER_INTERFACE)
     clearLuaScript();
     pdns::coverage::dumpCoverageData();
@@ -1401,7 +1395,7 @@ void doExitGeneric(bool nicely)
   }
 }
 
-void doExit()
+static void doExit()
 {
   doExitGeneric(false);
 }
@@ -1561,7 +1555,7 @@ DNSName getRegisteredName(const DNSName& dom)
   while (!parts.empty()) {
     if (parts.size() == 1 || binary_search(g_pubs.begin(), g_pubs.end(), parts)) {
 
-      string ret = last;
+      string ret = std::move(last);
       if (!ret.empty())
         ret += ".";
 
@@ -1643,7 +1637,7 @@ static string addDontThrottleNames(T begin, T end)
   while (begin != end) {
     try {
       auto d = DNSName(*begin);
-      toAdd.push_back(d);
+      toAdd.push_back(std::move(d));
     }
     catch (const std::exception& e) {
       return "Problem parsing '" + *begin + "': " + e.what() + ", nothing added\n";
@@ -1936,7 +1930,7 @@ RecursorControlChannel::Answer luaconfig(bool broadcast)
       lci = g_luaconfs.getCopy();
       if (broadcast) {
         startLuaConfigDelayedThreads(lci, lci.generation);
-        broadcastFunction([=] { return pleaseSupplantProxyMapping(proxyMapping); });
+        broadcastFunction([pmap = std::move(proxyMapping)] { return pleaseSupplantProxyMapping(pmap); });
       }
       else {
         // Initial proxy mapping

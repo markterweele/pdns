@@ -39,6 +39,7 @@
 #include <stdexcept>
 #include <string>
 #include <cctype>
+#include <utility>
 #include <vector>
 
 #include "namespaces.hh"
@@ -109,6 +110,7 @@ bool getTSIGHashEnum(const DNSName& algoName, TSIGHashEnum& algoEnum);
 DNSName getTSIGAlgoName(TSIGHashEnum& algoEnum);
 
 int logFacilityToLOG(unsigned int facility);
+std::optional<int> logFacilityFromString(std::string facilityStr);
 
 template<typename Container>
 void
@@ -334,7 +336,7 @@ inline double getTime()
   throw runtime_error(why + ": " + stringerror(errno));
 }
 
-string makeHexDump(const string& str);
+string makeHexDump(const string& str, const string& sep = " ");
 //! Convert the hexstring in to a byte string
 string makeBytesFromHex(const string &in);
 
@@ -527,7 +529,8 @@ private:
 class SimpleMatch
 {
 public:
-  SimpleMatch(const string &mask, bool caseFold = false): d_mask(mask), d_fold(caseFold)
+  SimpleMatch(string mask, bool caseFold = false) :
+    d_mask(std::move(mask)), d_fold(caseFold)
   {
   }
 

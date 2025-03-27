@@ -19,9 +19,9 @@
  * along with this program; if not, write to the Free Software
  * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
  */
-#ifdef HAVE_CONFIG_H
+
 #include "config.h"
-#endif
+
 #include "utility.hh"
 #include "webserver.hh"
 #include "misc.hh"
@@ -37,7 +37,7 @@
 #include "uuid-utils.hh"
 #include <yahttp/router.hpp>
 #include <algorithm>
-#include <unordered_set>
+#include <bitset>
 
 json11::Json HttpRequest::json()
 {
@@ -135,6 +135,8 @@ void HttpResponse::setSuccessResult(const std::string& message, const int status
   setJsonBody(json11::Json::object { { "result", message } });
   this->status = status_;
 }
+
+#ifndef RUST_WS
 
 static void bareHandlerWrapper(const WebServer::HandlerFunction& handler, YaHTTP::Request* req, YaHTTP::Response* resp)
 {
@@ -587,8 +589,8 @@ WebServer::WebServer(string listenaddress, int port) :
   d_listenaddress(std::move(listenaddress)),
   d_port(port),
   d_server(nullptr),
-  d_maxbodysize(2*1024*1024),
-  d_connectiontimeout(5)
+  d_maxbodysize(static_cast<ssize_t>(2 * 1024 * 1024))
+
 {
     YaHTTP::Router::Map("OPTIONS", "/<*url>", [](YaHTTP::Request *req, YaHTTP::Response *resp) {
       // look for url in routes
@@ -686,3 +688,4 @@ void WebServer::go()
   }
   _exit(1);
 }
+#endif // !RUST_WS

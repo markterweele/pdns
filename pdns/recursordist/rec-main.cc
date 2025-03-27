@@ -39,11 +39,12 @@
 #include "secpoll-recursor.hh"
 #include "logging.hh"
 #include "dnsseckeeper.hh"
-#include "settings/cxxsettings.hh"
+#include "rec-rust-lib/cxxsettings.hh"
 #include "json.hh"
 #include "rec-system-resolve.hh"
 #include "root-dnssec.hh"
 #include "ratelimitedlog.hh"
+#include "rec-rust-lib/rust/web.rs.h"
 
 #ifdef NOD_ENABLED
 #include "nod.hh"
@@ -105,15 +106,15 @@ std::unique_ptr<nod::UniqueResponseDB> g_udrDBp;
 std::atomic<bool> statsWanted;
 uint32_t g_disthashseed;
 bool g_useIncomingECS;
-NetmaskGroup g_proxyProtocolACL;
-std::set<ComboAddress> g_proxyProtocolExceptions;
+static shared_ptr<NetmaskGroup> g_initialProxyProtocolACL;
+static shared_ptr<std::set<ComboAddress>> g_initialProxyProtocolExceptions;
 boost::optional<ComboAddress> g_dns64Prefix{boost::none};
 DNSName g_dns64PrefixReverse;
 unsigned int g_maxChainLength;
-std::shared_ptr<SyncRes::domainmap_t> g_initialDomainMap; // new threads needs this to be setup
-std::shared_ptr<NetmaskGroup> g_initialAllowFrom; // new thread needs to be setup with this
-std::shared_ptr<NetmaskGroup> g_initialAllowNotifyFrom; // new threads need this to be setup
-std::shared_ptr<notifyset_t> g_initialAllowNotifyFor; // new threads need this to be setup
+LockGuarded<std::shared_ptr<SyncRes::domainmap_t>> g_initialDomainMap; // new threads needs this to be setup
+LockGuarded<std::shared_ptr<NetmaskGroup>> g_initialAllowFrom; // new thread needs to be setup with this
+LockGuarded<std::shared_ptr<NetmaskGroup>> g_initialAllowNotifyFrom; // new threads need this to be setup
+LockGuarded<std::shared_ptr<notifyset_t>> g_initialAllowNotifyFor; // new threads need this to be setup
 bool g_logRPZChanges{false};
 static time_t s_statisticsInterval;
 static std::atomic<uint32_t> s_counter;
@@ -130,8 +131,7 @@ std::shared_ptr<Logr::Logger> g_slogudpout;
 static deferredAdd_t s_deferredUDPadds;
 static deferredAdd_t s_deferredTCPadds;
 
-/* first we have the handler thread, t_id == 0 (some other
-   helper threads like SNMP might have t_id == 0 as well)
+/* first we have the handler thread, t_id == 0 (threads not created as a RecursorThread have t_id = NOT_INITED)
    then the distributor threads if any
    and finally the workers */
 std::vector<RecThreadInfo> RecThreadInfo::s_threadInfos;
@@ -143,7 +143,7 @@ bool RecThreadInfo::s_weDistributeQueries; // if true, 1 or more threads listen 
 unsigned int RecThreadInfo::s_numDistributorThreads;
 unsigned int RecThreadInfo::s_numUDPWorkerThreads;
 unsigned int RecThreadInfo::s_numTCPWorkerThreads;
-thread_local unsigned int RecThreadInfo::t_id;
+thread_local unsigned int RecThreadInfo::t_id{RecThreadInfo::TID_NOT_INITED};
 
 pdns::RateLimitedLog g_rateLimitedLogger;
 
@@ -272,6 +272,10 @@ int RecThreadInfo::runThreads(Logr::log_t log)
       taskInfo.start(currentThreadId, "task", cpusMap, log);
     }
 
+    if (::arg().mustDo("webserver")) {
+      serveRustWeb();
+    }
+
     currentThreadId = 1;
     auto& info = RecThreadInfo::info(currentThreadId);
     info.setListener();
@@ -279,10 +283,9 @@ int RecThreadInfo::runThreads(Logr::log_t log)
     RecThreadInfo::setThreadId(currentThreadId);
     recursorThread();
 
-    for (unsigned int thread = 0; thread < RecThreadInfo::numRecursorThreads(); thread++) {
-      if (thread == 1) {
-        continue;
-      }
+    // Skip handler thread (it might be still handling the quit-nicely) and 1, which is actually the main thread in this case;
+    // handler thread (0) will be handled in main().
+    for (unsigned int thread = 2; thread < RecThreadInfo::numRecursorThreads(); thread++) {
       auto& tInfo = RecThreadInfo::info(thread);
       tInfo.thread.join();
       if (tInfo.exitCode != 0) {
@@ -350,7 +353,14 @@ int RecThreadInfo::runThreads(Logr::log_t log)
     info.setHandler();
     info.start(currentThreadId, "web+stat", cpusMap, log);
 
+    if (::arg().mustDo("webserver")) {
+      serveRustWeb();
+    }
     for (auto& tInfo : RecThreadInfo::infos()) {
+      // who handles the handler? the caller!
+      if (tInfo.isHandler()) {
+        continue;
+      }
       tInfo.thread.join();
       if (tInfo.exitCode != 0) {
         ret = tInfo.exitCode;
@@ -552,7 +562,7 @@ void protobufLogQuery(LocalStateHolder<LuaConfigItems>& luaconfsLocal, const boo
   msg.setRequestorId(requestorId);
   msg.setDeviceId(deviceId);
   msg.setDeviceName(deviceName);
-  msg.setWorkerId(RecThreadInfo::id());
+  msg.setWorkerId(RecThreadInfo::thread_local_id());
   // For queries, packetCacheHit and outgoingQueries are not relevant
 
   if (!policyTags.empty()) {
@@ -631,12 +641,12 @@ void protobufLogResponse(const struct dnsheader* header, LocalStateHolder<LuaCon
   pbMessage.setId(header->id);
 
   pbMessage.setTime();
-  pbMessage.setEDNSSubnet(ednssubnet.source, ednssubnet.source.isIPv4() ? luaconfsLocal->protobufMaskV4 : luaconfsLocal->protobufMaskV6);
+  pbMessage.setEDNSSubnet(ednssubnet.getSource(), ednssubnet.getSource().isIPv4() ? luaconfsLocal->protobufMaskV4 : luaconfsLocal->protobufMaskV6);
   pbMessage.setRequestorId(requestorId);
   pbMessage.setDeviceId(deviceId);
   pbMessage.setDeviceName(deviceName);
   pbMessage.setToPort(destination.getPort());
-  pbMessage.setWorkerId(RecThreadInfo::id());
+  pbMessage.setWorkerId(RecThreadInfo::thread_local_id());
   // this method is only used for PC cache hits
   pbMessage.setPacketCacheHit(true);
   // we do not set outgoingQueries, it is not relevant for PC cache hits
@@ -950,7 +960,7 @@ static void daemonize(Logr::log_t log)
 
 static void termIntHandler([[maybe_unused]] int arg)
 {
-  doExit();
+  _exit(1);
 }
 
 static void usr1Handler([[maybe_unused]] int arg)
@@ -1106,7 +1116,7 @@ static void loggerSDBackend(const Logging::Entry& entry)
   }
   // Thread id filled in by backend, since the SL code does not know about RecursorThreads
   // We use the Recursor thread, other threads get id 0. May need to revisit.
-  appendKeyAndVal("TID", std::to_string(RecThreadInfo::id()));
+  appendKeyAndVal("TID", std::to_string(RecThreadInfo::thread_local_id()));
 
   vector<iovec> iov;
   iov.reserve(strings.size());
@@ -1134,7 +1144,7 @@ static void loggerJSONBackend(const Logging::Entry& entry)
     {"level", std::to_string(entry.level)},
     // Thread id filled in by backend, since the SL code does not know about RecursorThreads
     // We use the Recursor thread, other threads get id 0. May need to revisit.
-    {"tid", std::to_string(RecThreadInfo::id())},
+    {"tid", std::to_string(RecThreadInfo::thread_local_id())},
     {"ts", Logging::toTimestampStringMilli(entry.d_timestamp, timebuf)},
   };
 
@@ -1187,7 +1197,7 @@ static void loggerBackend(const Logging::Entry& entry)
   }
   // Thread id filled in by backend, since the SL code does not know about RecursorThreads
   // We use the Recursor thread, other threads get id 0. May need to revisit.
-  buf << " tid=" << std::quoted(std::to_string(RecThreadInfo::id()));
+  buf << " tid=" << std::quoted(std::to_string(RecThreadInfo::thread_local_id()));
   std::array<char, 64> timebuf{};
   buf << " ts=" << std::quoted(Logging::toTimestampStringMilli(entry.d_timestamp, timebuf));
   for (auto const& value : entry.values) {
@@ -1378,11 +1388,25 @@ void* pleaseSupplantAllowNotifyFor(std::shared_ptr<notifyset_t> allowNotifyFor)
   return nullptr;
 }
 
+static void* pleaseSupplantProxyProtocolSettings(std::shared_ptr<NetmaskGroup> acl, std::shared_ptr<std::set<ComboAddress>> except)
+{
+  t_proxyProtocolACL = std::move(acl);
+  t_proxyProtocolExceptions = std::move(except);
+  return nullptr;
+}
+
 void parseACLs()
 {
   auto log = g_slog->withName("config");
 
   static bool l_initialized;
+  const std::array<string, 6> aclNames = {
+    "allow-from-file",
+    "allow-from",
+    "allow-notify-from-file",
+    "allow-notify-from",
+    "proxy-protocol-from",
+    "proxy-protocol-exceptions"};
 
   if (l_initialized) { // only reload configuration file on second call
 
@@ -1424,6 +1448,8 @@ void parseACLs()
         throw runtime_error("Unable to re-parse configuration file '" + configName + "'");
       }
       ::arg().preParseFile(configName, "allow-notify-from");
+      ::arg().preParseFile(configName, "proxy-protocol-from");
+      ::arg().preParseFile(configName, "proxy-protocol-exceptions");
 
       ::arg().preParseFile(configName, "include-dir");
       ::arg().preParse(g_argc, g_argv, "include-dir");
@@ -1433,28 +1459,18 @@ void parseACLs()
       ::arg().gatherIncludes(::arg()["include-dir"], ".conf", extraConfigs);
 
       for (const std::string& fileName : extraConfigs) {
-        if (!::arg().preParseFile(fileName, "allow-from-file", ::arg()["allow-from-file"])) {
-          throw runtime_error("Unable to re-parse configuration file include '" + fileName + "'");
-        }
-        if (!::arg().preParseFile(fileName, "allow-from", ::arg()["allow-from"])) {
-          throw runtime_error("Unable to re-parse configuration file include '" + fileName + "'");
-        }
-
-        if (!::arg().preParseFile(fileName, "allow-notify-from-file", ::arg()["allow-notify-from-file"])) {
-          throw runtime_error("Unable to re-parse configuration file include '" + fileName + "'");
-        }
-        if (!::arg().preParseFile(fileName, "allow-notify-from", ::arg()["allow-notify-from"])) {
-          throw runtime_error("Unable to re-parse configuration file include '" + fileName + "'");
+        for (const auto& aclName : aclNames) {
+          if (!::arg().preParseFile(fileName, aclName, ::arg()[aclName])) {
+            throw runtime_error("Unable to re-parse configuration file include '" + fileName + "'");
+          }
         }
       }
     }
   }
   // Process command line args potentially overriding settings read from file
-  ::arg().preParse(g_argc, g_argv, "allow-from-file");
-  ::arg().preParse(g_argc, g_argv, "allow-from");
-
-  ::arg().preParse(g_argc, g_argv, "allow-notify-from-file");
-  ::arg().preParse(g_argc, g_argv, "allow-notify-from");
+  for (const auto& aclName : aclNames) {
+    ::arg().preParse(g_argc, g_argv, aclName);
+  }
 
   auto allowFrom = parseACL("allow-from-file", "allow-from", log);
 
@@ -1466,26 +1482,48 @@ void parseACLs()
     allowFrom = nullptr;
   }
 
-  g_initialAllowFrom = allowFrom;
+  *g_initialAllowFrom.lock() = allowFrom;
   // coverity[copy_constructor_call] maybe this can be avoided, but be careful as pointers get passed to other threads
   broadcastFunction([=] { return pleaseSupplantAllowFrom(allowFrom); });
 
   auto allowNotifyFrom = parseACL("allow-notify-from-file", "allow-notify-from", log);
 
-  g_initialAllowNotifyFrom = allowNotifyFrom;
+  *g_initialAllowNotifyFrom.lock() = allowNotifyFrom;
   // coverity[copy_constructor_call] maybe this can be avoided, but be careful as pointers get passed to other threads
   broadcastFunction([=] { return pleaseSupplantAllowNotifyFrom(allowNotifyFrom); });
+
+  std::shared_ptr<NetmaskGroup> proxyProtocolACL;
+  std::shared_ptr<std::set<ComboAddress>> proxyProtocolExceptions;
+  if (!::arg()["proxy-protocol-from"].empty()) {
+    proxyProtocolACL = std::make_shared<NetmaskGroup>();
+    proxyProtocolACL->toMasks(::arg()["proxy-protocol-from"]);
+
+    std::vector<std::string> vec;
+    stringtok(vec, ::arg()["proxy-protocol-exceptions"], ", ");
+    if (!vec.empty()) {
+      proxyProtocolExceptions = std::make_shared<std::set<ComboAddress>>();
+      for (const auto& sockAddrStr : vec) {
+        ComboAddress sockAddr(sockAddrStr, 53);
+        proxyProtocolExceptions->emplace(sockAddr);
+      }
+    }
+  }
+  g_initialProxyProtocolACL = proxyProtocolACL;
+  g_initialProxyProtocolExceptions = proxyProtocolExceptions;
+
+  // coverity[copy_constructor_call] maybe this can be avoided, but be careful as pointers get passed to other threads
+  broadcastFunction([=] { return pleaseSupplantProxyProtocolSettings(proxyProtocolACL, proxyProtocolExceptions); });
 
   l_initialized = true;
 }
 
 void broadcastFunction(const pipefunc_t& func)
 {
-  /* This function might be called by the worker with t_id 0 during startup
+  /* This function might be called by the worker with t_id not inited during startup
      for the initialization of ACLs and domain maps. After that it should only
      be called by the handler. */
 
-  if (RecThreadInfo::infos().empty() && RecThreadInfo::id() == 0) {
+  if (RecThreadInfo::infos().empty() && !RecThreadInfo::is_thread_inited()) {
     /* the handler and  distributors will call themselves below, but
        during startup we get called while g_threadInfos has not been
        populated yet to update the ACL or domain maps, so we need to
@@ -1496,7 +1534,7 @@ void broadcastFunction(const pipefunc_t& func)
 
   unsigned int thread = 0;
   for (const auto& threadInfo : RecThreadInfo::infos()) {
-    if (thread++ == RecThreadInfo::id()) {
+    if (thread++ == RecThreadInfo::thread_local_id()) {
       func(); // don't write to ourselves!
       continue;
     }
@@ -1566,16 +1604,15 @@ static RemoteLoggerStats_t& operator+=(RemoteLoggerStats_t& lhs, const RemoteLog
 template <class T>
 T broadcastAccFunction(const std::function<T*()>& func)
 {
-  if (!RecThreadInfo::self().isHandler()) {
-    SLOG(g_log << Logger::Error << "broadcastAccFunction has been called by a worker (" << RecThreadInfo::id() << ")" << endl,
-         g_slog->withName("runtime")->info(Logr::Critical, "broadcastAccFunction has been called by a worker")); // tid will be added
+  if (RecThreadInfo::thread_local_id() != 0) {
+    g_slog->withName("runtime")->info(Logr::Critical, "broadcastAccFunction has been called by a worker"); // tid will be added
     _exit(1);
   }
 
   unsigned int thread = 0;
   T ret = T();
   for (const auto& threadInfo : RecThreadInfo::infos()) {
-    if (thread++ == RecThreadInfo::id()) {
+    if (thread++ == RecThreadInfo::thread_local_id()) {
       continue;
     }
 
@@ -1882,7 +1919,7 @@ static unsigned int initDistribution(Logr::log_t log)
   g_reusePort = ::arg().mustDo("reuseport");
 #endif
 
-  RecThreadInfo::infos().resize(RecThreadInfo::numRecursorThreads());
+  RecThreadInfo::resize(RecThreadInfo::numRecursorThreads());
 
   if (g_reusePort) {
     unsigned int threadNum = 1;
@@ -1960,10 +1997,6 @@ static int initForks(Logr::log_t log)
     signal(SIGTERM, termIntHandler);
     signal(SIGINT, termIntHandler);
   }
-#if defined(__SANITIZE_THREAD__) || (defined(__SANITIZE_ADDRESS__) && defined(HAVE_LEAK_SANITIZER_INTERFACE))
-  // If san is wanted, we dump the info ourselves
-  signal(SIGTERM, termIntHandler);
-#endif
 
   signal(SIGUSR1, usr1Handler);
   signal(SIGUSR2, usr2Handler);
@@ -2210,13 +2243,18 @@ static int serviceMain(Logr::log_t log)
     return ret;
   }
 
-  g_proxyProtocolACL.toMasks(::arg()["proxy-protocol-from"]);
-  {
+  if (!::arg()["proxy-protocol-from"].empty()) {
+    g_initialProxyProtocolACL = std::make_shared<NetmaskGroup>();
+    g_initialProxyProtocolACL->toMasks(::arg()["proxy-protocol-from"]);
+
     std::vector<std::string> vec;
     stringtok(vec, ::arg()["proxy-protocol-exceptions"], ", ");
-    for (const auto& sockAddrStr : vec) {
-      ComboAddress sockAddr(sockAddrStr, 53);
-      g_proxyProtocolExceptions.emplace(sockAddr);
+    if (!vec.empty()) {
+      g_initialProxyProtocolExceptions = std::make_shared<std::set<ComboAddress>>();
+      for (const auto& sockAddrStr : vec) {
+        ComboAddress sockAddr(sockAddrStr, 53);
+        g_initialProxyProtocolExceptions->emplace(sockAddr);
+      }
     }
   }
   g_proxyProtocolMaximumSize = ::arg().asNum("proxy-protocol-maximum-size");
@@ -2227,7 +2265,10 @@ static int serviceMain(Logr::log_t log)
   }
   g_networkTimeoutMsec = ::arg().asNum("network-timeout");
 
-  std::tie(g_initialDomainMap, g_initialAllowNotifyFor) = parseZoneConfiguration(g_yamlSettings);
+  { // Reduce scope of locks (otherwise Coverity induces from this line the global vars below should be
+    // protected by a mutex)
+    std::tie(*g_initialDomainMap.lock(), *g_initialAllowNotifyFor.lock()) = parseZoneConfiguration(g_yamlSettings);
+  }
 
   g_latencyStatSize = ::arg().asNum("latency-statistic-size");
 
@@ -2446,8 +2487,13 @@ static void handleRCC(int fileDesc, FDMultiplexer::funcparam_t& /* var */)
     RecursorControlParser::func_t* command = nullptr;
     auto answer = RecursorControlParser::getAnswer(clientfd, msg, &command);
 
-    g_rcc.send(clientfd, answer);
+    if (command != doExitNicely) {
+      g_rcc.send(clientfd, answer);
+    }
     command();
+    if (command == doExitNicely) {
+      g_rcc.send(clientfd, answer);
+    }
   }
   catch (const std::exception& e) {
     SLOG(g_log << Logger::Error << "Error dealing with control socket request: " << e.what() << endl,
@@ -2500,19 +2546,15 @@ public:
   }
 
 private:
-  struct timeval last_run
-  {
-    0, 0
-  };
+  struct timeval last_run{
+    0, 0};
   struct timeval period;
   string name;
 };
 
 static void houseKeepingWork(Logr::log_t log)
 {
-  struct timeval now
-  {
-  };
+  struct timeval now{};
   Utility::gettimeofday(&now);
   t_Counters.updateSnap(now, g_regressionTestMode);
 
@@ -2726,15 +2768,11 @@ static void runLuaMaintenance(RecThreadInfo& threadInfo, time_t& last_lua_mainte
     if (threadInfo.isWorker()) { // either UDP of TCP worker
       // Only on threads processing queries
       if (g_now.tv_sec - last_lua_maintenance >= luaMaintenanceInterval) {
-        struct timeval start
-        {
-        };
+        struct timeval start{};
         Utility::gettimeofday(&start);
         t_pdl->maintenance();
         last_lua_maintenance = g_now.tv_sec;
-        struct timeval stop
-        {
-        };
+        struct timeval stop{};
         Utility::gettimeofday(&stop);
         t_Counters.at(rec::Counter::maintenanceUsec) += uSec(stop - start);
         ++t_Counters.at(rec::Counter::maintenanceCalls);
@@ -2827,12 +2865,13 @@ static void recursorThread()
     auto& threadInfo = RecThreadInfo::self();
     {
       SyncRes tmp(g_now); // make sure it allocates tsstorage before we do anything, like primeHints or so..
-      SyncRes::setDomainMap(g_initialDomainMap);
-      t_allowFrom = g_initialAllowFrom;
-      t_allowNotifyFrom = g_initialAllowNotifyFrom;
-      t_allowNotifyFor = g_initialAllowNotifyFor;
+      SyncRes::setDomainMap(*g_initialDomainMap.lock());
+      t_allowFrom = *g_initialAllowFrom.lock();
+      t_allowNotifyFrom = *g_initialAllowNotifyFrom.lock();
+      t_allowNotifyFor = *g_initialAllowNotifyFor.lock();
+      t_proxyProtocolACL = g_initialProxyProtocolACL;
+      t_proxyProtocolExceptions = g_initialProxyProtocolExceptions;
       t_udpclientsocks = std::make_unique<UDPClientSocks>();
-      t_tcpClientCounts = std::make_unique<tcpClientCounts_t>();
       if (g_proxyMapping) {
         t_proxyMapping = make_unique<ProxyMapping>(*g_proxyMapping);
       }
@@ -2897,7 +2936,7 @@ static void recursorThread()
     threadInfo.setMT(g_multiTasker.get());
 
     {
-      /* start protobuf export threads if needed, don;'t keep a ref to lua config around */
+      /* start protobuf export threads if needed, don't keep a ref to lua config around */
       auto luaconfsLocal = g_luaconfs.getLocal();
       checkProtobufExport(luaconfsLocal);
       checkOutgoingProtobufExport(luaconfsLocal);
@@ -2912,24 +2951,9 @@ static void recursorThread()
     }
 
     t_fdm = unique_ptr<FDMultiplexer>(getMultiplexer(log));
-
-    std::unique_ptr<RecursorWebServer> rws;
-
     t_fdm->addReadFD(threadInfo.getPipes().readToThread, handlePipeRequest);
 
     if (threadInfo.isHandler()) {
-      if (::arg().mustDo("webserver")) {
-        SLOG(g_log << Logger::Warning << "Enabling web server" << endl,
-             log->info(Logr::Info, "Enabling web server"));
-        try {
-          rws = make_unique<RecursorWebServer>(t_fdm.get());
-        }
-        catch (const PDNSException& e) {
-          SLOG(g_log << Logger::Error << "Unable to start the internal web server: " << e.reason << endl,
-               log->error(Logr::Critical, e.reason, "Exception while starting internal web server"));
-          _exit(99);
-        }
-      }
       SLOG(g_log << Logger::Info << "Enabled '" << t_fdm->getName() << "' multiplexer" << endl,
            log->info(Logr::Info, "Enabled multiplexer", "name", Logging::Loggable(t_fdm->getName())));
     }
@@ -3026,7 +3050,8 @@ static pair<int, bool> doConfig(Logr::log_t startupLog, const string& configname
       }
     }
     else if (config == "default" || config.empty()) {
-      cout << ::arg().configstring(false, true);
+      auto yaml = pdns::settings::rec::defaultsToYaml();
+      cout << yaml << endl;
     }
     else if (config == "diff") {
       if (!::arg().laxFile(configname)) {
@@ -3149,6 +3174,8 @@ static void setupLogging(const string& logname)
   }
 }
 
+DoneRunning g_doneRunning;
+
 int main(int argc, char** argv)
 {
   g_argc = argc;
@@ -3259,7 +3286,7 @@ int main(int argc, char** argv)
     }
     else {
       configname += ".conf";
-      startupLog->info(Logr::Warning, "Trying to read YAML from .yml or .conf failed, failing back to old-style config read", "configname", Logging::Loggable(configname));
+      startupLog->info(Logr::Warning, "Trying to read YAML from .yml or .conf failed, falling back to old-style config read", "configname", Logging::Loggable(configname));
       bool mustExit = false;
       std::tie(ret, mustExit) = doConfig(startupLog, configname, argc, argv);
       if (ret != 0 || mustExit) {
@@ -3271,9 +3298,11 @@ int main(int argc, char** argv)
       }
       else {
         if (!::arg().mustDo("enable-old-settings")) {
-          startupLog->info(Logr::Error, "Old-style settings syntax not enabled by default anymore. Use YAML or enable with --enable-old-settings on the command line", "configname", Logging::Loggable(configname));
+          startupLog->info(Logr::Error, "Old-style settings syntax not supported by default anymore", "configname", Logging::Loggable(configname));
+          startupLog->info(Logr::Error, "Convert to YAML settings. If not feasible use --enable-old-settings on the command line. This option will be removed in a future release.");
           return EXIT_FAILURE;
         }
+        startupLog->info(Logr::Warning, "Convert to YAML settings. The --enable-old-settings option on the command line will be removed in a future release.");
       }
     }
 
@@ -3318,6 +3347,12 @@ int main(int argc, char** argv)
     }
 
     ret = serviceMain(startupLog);
+    {
+      std::lock_guard lock(g_doneRunning.mutex);
+      g_doneRunning.done = true;
+      g_doneRunning.condVar.notify_one();
+    }
+    RecThreadInfo::joinThread0();
   }
   catch (const PDNSException& ae) {
     SLOG(g_log << Logger::Error << "Exception: " << ae.reason << endl,
@@ -3355,14 +3390,14 @@ static RecursorControlChannel::Answer* doReloadLuaScript()
       t_pdl->loadFile(fname);
     }
     catch (std::runtime_error& ex) {
-      string msg = std::to_string(RecThreadInfo::id()) + " Retaining current script, could not read '" + fname + "': " + ex.what();
+      string msg = std::to_string(RecThreadInfo::thread_local_id()) + " Retaining current script, could not read '" + fname + "': " + ex.what();
       SLOG(g_log << Logger::Error << msg << endl,
            log->error(Logr::Error, ex.what(), "Retaining current script, could not read new script"));
       return new RecursorControlChannel::Answer{1, msg + "\n"};
     }
   }
   catch (std::exception& e) {
-    SLOG(g_log << Logger::Error << RecThreadInfo::id() << " Retaining current script, error from '" << fname << "': " << e.what() << endl,
+    SLOG(g_log << Logger::Error << RecThreadInfo::thread_local_id() << " Retaining current script, error from '" << fname << "': " << e.what() << endl,
          log->error(Logr::Error, e.what(), "Retaining current script, error in new script"));
     return new RecursorControlChannel::Answer{1, string("retaining current script, error from '" + fname + "': " + e.what() + "\n")};
   }

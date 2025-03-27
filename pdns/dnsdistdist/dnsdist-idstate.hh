@@ -79,10 +79,8 @@ struct StopWatch
     return d_start;
   }
 
-  struct timespec d_start
-  {
-    0, 0
-  };
+  struct timespec d_start{
+    0, 0};
 
 private:
   struct timespec getCurrentTime() const
@@ -177,6 +175,7 @@ struct InternalQueryState
   bool useZeroScope{false};
   bool forwardedOverUDP{false};
   bool selfGenerated{false};
+  bool cacheHit{false};
 };
 
 struct IDState

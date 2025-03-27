@@ -99,14 +99,46 @@ size_t IncomingTCPConnectionState::clearAllDownstreamConnections()
   return t_downstreamTCPConnectionsManager.clear();
 }
 
+static std::pair<std::shared_ptr<TCPConnectionToBackend>, bool> getOwnedDownstreamConnection(std::map<std::shared_ptr<DownstreamState>, std::deque<std::shared_ptr<TCPConnectionToBackend>>>& ownedConnectionsToBackend, const std::shared_ptr<DownstreamState>& backend, const std::unique_ptr<std::vector<ProxyProtocolValue>>& tlvs)
+{
+  bool tlvsMismatch = false;
+  auto connIt = ownedConnectionsToBackend.find(backend);
+  if (connIt == ownedConnectionsToBackend.end()) {
+    DEBUGLOG("no owned connection found for " << backend->getName());
+    return {nullptr, tlvsMismatch};
+  }
+
+  for (auto& conn : connIt->second) {
+    if (conn->canBeReused(true)) {
+      if (conn->matchesTLVs(tlvs)) {
+        DEBUGLOG("Got one owned connection accepting more for " << backend->getName());
+        conn->setReused();
+        ++backend->tcpReusedConnections;
+        return {conn, tlvsMismatch};
+      }
+      DEBUGLOG("Found one connection to " << backend->getName() << " but with different TLV values");
+      tlvsMismatch = true;
+    }
+    DEBUGLOG("not accepting more for " << backend->getName());
+  }
+
+  return {nullptr, tlvsMismatch};
+}
+
 std::shared_ptr<TCPConnectionToBackend> IncomingTCPConnectionState::getDownstreamConnection(std::shared_ptr<DownstreamState>& backend, const std::unique_ptr<std::vector<ProxyProtocolValue>>& tlvs, const struct timeval& now)
 {
-  auto downstream = getOwnedDownstreamConnection(backend, tlvs);
+  auto [downstream, tlvsMismatch] = getOwnedDownstreamConnection(d_ownedConnectionsToBackend, backend, tlvs);
 
   if (!downstream) {
+    if (backend->d_config.useProxyProtocol && tlvsMismatch) {
+      clearOwnedDownstreamConnections(backend);
+    }
+
     /* we don't have a connection to this backend owned yet, let's get one (it might not be a fresh one, though) */
     downstream = t_downstreamTCPConnectionsManager.getConnectionToDownstream(d_threadData.mplexer, backend, now, std::string());
-    if (backend->d_config.useProxyProtocol) {
+    // if we had an existing connection but the TLVs are different, they are likely unique per query so do not bother keeping the connection
+    // around
+    if (backend->d_config.useProxyProtocol && !tlvsMismatch) {
       registerOwnedDownstreamConnection(downstream);
     }
   }
@@ -260,34 +292,37 @@ void IncomingTCPConnectionState::resetForNewQuery()
   d_state = State::waitingForQuery;
 }
 
-std::shared_ptr<TCPConnectionToBackend> IncomingTCPConnectionState::getOwnedDownstreamConnection(const std::shared_ptr<DownstreamState>& backend, const std::unique_ptr<std::vector<ProxyProtocolValue>>& tlvs)
-{
-  auto connIt = d_ownedConnectionsToBackend.find(backend);
-  if (connIt == d_ownedConnectionsToBackend.end()) {
-    DEBUGLOG("no owned connection found for " << backend->getName());
-    return nullptr;
-  }
-
-  for (auto& conn : connIt->second) {
-    if (conn->canBeReused(true) && conn->matchesTLVs(tlvs)) {
-      DEBUGLOG("Got one owned connection accepting more for " << backend->getName());
-      conn->setReused();
-      return conn;
-    }
-    DEBUGLOG("not accepting more for " << backend->getName());
-  }
-
-  return nullptr;
-}
-
 void IncomingTCPConnectionState::registerOwnedDownstreamConnection(std::shared_ptr<TCPConnectionToBackend>& conn)
 {
-  d_ownedConnectionsToBackend[conn->getDS()].push_front(conn);
+  const auto& downstream = conn->getDS();
+  auto& queue = d_ownedConnectionsToBackend[downstream];
+  // how many proxy-protocol enabled connections do we want to keep around?
+  // - they are only usable for this incoming connection because of the proxy protocol header containing the source and destination addresses and ports
+  // - if we have TLV values, and they are unique per query, keeping these is useless
+  // - if there is no, or identical, TLV values, a single outgoing connection is enough if maxInFlight == 1, or if incoming maxInFlight == outgoing maxInFlight
+  // so it makes sense to keep a few of them around if incoming maxInFlight is greater than outgoing maxInFlight
+
+  auto incomingMaxInFlightQueriesPerConn = d_ci.cs->d_maxInFlightQueriesPerConn;
+  incomingMaxInFlightQueriesPerConn = std::max(incomingMaxInFlightQueriesPerConn, static_cast<size_t>(1U));
+  auto outgoingMaxInFlightQueriesPerConn = downstream->d_config.d_maxInFlightQueriesPerConn;
+  outgoingMaxInFlightQueriesPerConn = std::max(outgoingMaxInFlightQueriesPerConn, static_cast<size_t>(1U));
+  size_t maxCachedOutgoingConnections = std::min(static_cast<size_t>(incomingMaxInFlightQueriesPerConn / outgoingMaxInFlightQueriesPerConn), static_cast<size_t>(5U));
+
+  queue.push_front(conn);
+  if (queue.size() > maxCachedOutgoingConnections) {
+    queue.pop_back();
+  }
+}
+
+void IncomingTCPConnectionState::clearOwnedDownstreamConnections(const std::shared_ptr<DownstreamState>& downstream)
+{
+  d_ownedConnectionsToBackend.erase(downstream);
 }
 
 /* called when the buffer has been set and the rules have been processed, and only from handleIO (sometimes indirectly via handleQuery) */
 IOState IncomingTCPConnectionState::sendResponse(const struct timeval& now, TCPResponse&& response)
 {
+  (void)now;
   d_state = State::sendingResponse;
 
   const auto responseSize = static_cast<uint16_t>(response.d_buffer.size());
@@ -1208,7 +1243,7 @@ void IncomingTCPConnectionState::notifyIOError(const struct timeval& now, TCPRes
   }
 }
 
-static bool processXFRResponse(PacketBuffer& response, DNSResponse& dnsResponse)
+static bool processXFRResponse(DNSResponse& dnsResponse)
 {
   const auto& chains = dnsdist::configuration::getCurrentRuntimeConfiguration().d_ruleChains;
   const auto& xfrRespRuleActions = dnsdist::rules::getResponseRuleChain(chains, dnsdist::rules::ResponseRuleChain::XFRResponseRules);
@@ -1242,7 +1277,7 @@ void IncomingTCPConnectionState::handleXFRResponse(const struct timeval& now, TC
   dnsResponse.d_incomingTCPState = state;
   memcpy(&response.d_cleartextDH, dnsResponse.getHeader().get(), sizeof(response.d_cleartextDH));
 
-  if (!processXFRResponse(response.d_buffer, dnsResponse)) {
+  if (!processXFRResponse(dnsResponse)) {
     state->terminateClientConnection();
     return;
   }
@@ -1270,6 +1305,7 @@ void IncomingTCPConnectionState::handleTimeout(std::shared_ptr<IncomingTCPConnec
 
 static void handleIncomingTCPQuery(int pipefd, FDMultiplexer::funcparam_t& param)
 {
+  (void)pipefd;
   auto* threadData = boost::any_cast<TCPClientThreadData*>(param);
 
   std::unique_ptr<ConnectionInfo> citmp{nullptr};
@@ -1303,6 +1339,7 @@ static void handleIncomingTCPQuery(int pipefd, FDMultiplexer::funcparam_t& param
 
 static void handleCrossProtocolQuery(int pipefd, FDMultiplexer::funcparam_t& param)
 {
+  (void)pipefd;
   auto* threadData = boost::any_cast<TCPClientThreadData*>(param);
 
   std::unique_ptr<CrossProtocolQuery> cpq{nullptr};
@@ -1340,6 +1377,7 @@ static void handleCrossProtocolQuery(int pipefd, FDMultiplexer::funcparam_t& par
 
 static void handleCrossProtocolResponse(int pipefd, FDMultiplexer::funcparam_t& param)
 {
+  (void)pipefd;
   auto* threadData = boost::any_cast<TCPClientThreadData*>(param);
 
   std::unique_ptr<TCPCrossProtocolResponse> cpr{nullptr};
@@ -1509,6 +1547,7 @@ static void tcpClientThread(pdns::channel::Receiver<ConnectionInfo>&& queryRecei
     }
 
     auto acceptCallback = [&data](int socket, FDMultiplexer::funcparam_t& funcparam) {
+      (void)socket;
       const auto* acceptorParam = boost::any_cast<const TCPAcceptorParam*>(funcparam);
       acceptNewConnection(*acceptorParam, &data);
     };
@@ -1671,6 +1710,7 @@ void tcpAcceptorThread(const std::vector<ClientState*>& states)
   }
   else {
     auto acceptCallback = [](int socket, FDMultiplexer::funcparam_t& funcparam) {
+      (void)socket;
       const auto* acceptorParam = boost::any_cast<const TCPAcceptorParam*>(funcparam);
       acceptNewConnection(*acceptorParam, nullptr);
     };

@@ -145,7 +145,7 @@ static void statNodeRespRing(statvisitor_t visitor, uint64_t seconds)
       }
 
       const bool hit = entry.isACacheHit();
-      root.submit(entry.name, ((entry.dh.rcode == 0 && entry.usec == std::numeric_limits<unsigned int>::max()) ? -1 : entry.dh.rcode), entry.size, hit, boost::none);
+      root.submit(entry.name, ((entry.dh.rcode == 0 && entry.usec == std::numeric_limits<unsigned int>::max()) ? -1 : entry.dh.rcode), entry.size, hit, std::nullopt);
     }
   }
 
@@ -715,7 +715,7 @@ void setupLuaInspection(LuaContext& luaCtx)
     for (const auto& entry : histo) {
       int stars = static_cast<int>(70.0 * entry.second / highest);
       char value = '*';
-      if (stars == 0 && entry.second != 0) {
+      if (stars == 0 && entry.second != 0 && highest != 0.0) {
         stars = 1; // you get 1 . to show something is there..
         if (70.0 * entry.second / highest > 0.5) {
           value = ':';
@@ -1084,9 +1084,9 @@ void setupLuaInspection(LuaContext& luaCtx)
         nowRealTime.tv_nsec -= 1000000000;
       }
 
-      return nowRealTime; }, [](DynBlock& block, [[maybe_unused]] timespec until) {});
+      return nowRealTime; }, []([[maybe_unused]] DynBlock& block, [[maybe_unused]] timespec until) {});
   luaCtx.registerMember<DynBlock, unsigned int>(
-    "blocks", [](const DynBlock& block) { return block.blocks.load(); }, [](DynBlock& block, [[maybe_unused]] unsigned int blocks) {});
+    "blocks", [](const DynBlock& block) { return block.blocks.load(); }, []([[maybe_unused]] DynBlock& block, [[maybe_unused]] unsigned int blocks) {});
   luaCtx.registerMember("action", &DynBlock::action);
   luaCtx.registerMember("warning", &DynBlock::warning);
   luaCtx.registerMember("bpf", &DynBlock::bpf);

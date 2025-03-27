@@ -548,6 +548,69 @@ class TestProtobufExtendedDNSErrorTags(DNSDistProtobufTest):
         self.assertIn(15, msg.meta[0].value.intVal)
         self.assertIn('Blocked by RPZ!', msg.meta[0].value.stringVal)
 
+class TestProtobufCacheHit(DNSDistProtobufTest):
+    _config_params = ['_testServerPort', '_protobufServerPort']
+    _config_template = """
+    newServer{address="127.0.0.1:%s"}
+    rl = newRemoteLogger('127.0.0.1:%d')
+    pc = newPacketCache(100, {maxTTL=86400, minTTL=1})
+    getPool(""):setCache(pc)
+
+    addResponseAction(AllRule(), RemoteLogResponseAction(rl, nil, false, {serverID='dnsdist-server-1'}))
+    addCacheHitResponseAction(AllRule(), RemoteLogResponseAction(rl, nil, false, {serverID='dnsdist-server-1'}))
+    """
+
+    def testProtobufExtendedError(self):
+        """
+        Protobuf: CacheHit field
+        """
+        name = 'cachehit.protobuf.tests.powerdns.com.'
+        query = dns.message.make_query(name, 'A', 'IN')
+        response = dns.message.make_response(query)
+        rrset = dns.rrset.from_text(name,
+                                    3600,
+                                    dns.rdataclass.IN,
+                                    dns.rdatatype.A,
+                                    '127.0.0.1')
+        response.answer.append(rrset)
+
+        # fill the cache
+        (receivedQuery, receivedResponse) = self.sendUDPQuery(query, response)
+        self.assertTrue(receivedQuery)
+        self.assertTrue(receivedResponse)
+        receivedQuery.id = query.id
+        self.assertEqual(query, receivedQuery)
+        self.assertEqual(response, receivedResponse)
+
+        if self._protobufQueue.empty():
+            # let the protobuf messages the time to get there
+            time.sleep(1)
+
+        # check the protobuf message corresponding to the UDP response
+        msg = self.getFirstProtobufMessage()
+        self.checkProtobufResponse(msg, dnsmessage_pb2.PBDNSMessage.UDP, response)
+        self.assertTrue(msg.HasField('packetCacheHit'))
+        self.assertFalse(msg.packetCacheHit)
+        self.assertTrue(msg.HasField('outgoingQueries'))
+        self.assertEqual(msg.outgoingQueries, 1)
+
+        # now shoud be a cache hit
+        (_, receivedResponse) = self.sendUDPQuery(query, response)
+        self.assertTrue(receivedResponse)
+        self.assertEqual(response, receivedResponse)
+
+        if self._protobufQueue.empty():
+            # let the protobuf messages the time to get there
+            time.sleep(1)
+
+        # check the protobuf message corresponding to the UDP response
+        msg = self.getFirstProtobufMessage()
+        self.checkProtobufResponse(msg, dnsmessage_pb2.PBDNSMessage.UDP, response)
+        self.assertTrue(msg.HasField('packetCacheHit'))
+        self.assertTrue(msg.packetCacheHit)
+        self.assertTrue(msg.HasField('outgoingQueries'))
+        self.assertEqual(msg.outgoingQueries, 0)
+
 class TestProtobufMetaDOH(DNSDistProtobufTest):
 
     _serverKey = 'server.key'
@@ -1001,3 +1064,77 @@ class TestProtobufAXFR(DNSDistProtobufTest):
                     self.assertEqual(socket.inet_ntop(socket.AF_INET6, rr.rdata), '2001:db8::1')
 
         self.assertEqual(count, len(responses))
+
+class TestYamlProtobuf(DNSDistProtobufTest):
+
+    _yaml_config_template = """---
+binds:
+  - listen_address: "127.0.0.1:%d"
+    reuseport: true
+    protocol: Do53
+    threads: 2
+
+backends:
+  - address: "127.0.0.1:%d"
+    protocol: Do53
+
+remote_logging:
+  protobuf_loggers:
+    - name: "my-logger"
+      address: "127.0.0.1:%d"
+      timeout: 1
+
+query_rules:
+  - name: "my-rule"
+    selector:
+      type: "All"
+    action:
+      type: "RemoteLog"
+      logger_name: "my-logger"
+      server_id: "%s"
+      export_tags:
+        - "tag-1"
+        - "tag-2"
+"""
+    _dnsDistPort = pickAvailablePort()
+    _testServerPort = pickAvailablePort()
+    _yaml_config_params = ['_dnsDistPort', '_testServerPort', '_protobufServerPort', '_protobufServerID']
+    _config_params = []
+
+    def testProtobuf(self):
+        """
+        Yaml: Remote logging via protobuf
+        """
+        name = 'remote-logging.protobuf.yaml.test.powerdns.com.'
+        query = dns.message.make_query(name, 'A', 'IN')
+        query.flags &= ~dns.flags.RD
+        response = dns.message.make_response(query)
+        rrset = dns.rrset.from_text(name,
+                                    60,
+                                    dns.rdataclass.IN,
+                                    dns.rdatatype.A,
+                                    '127.0.0.1')
+
+        response.answer.append(rrset)
+
+        for method in ("sendUDPQuery", "sendTCPQuery"):
+            sender = getattr(self, method)
+            (receivedQuery, receivedResponse) = sender(query, response=response)
+            receivedQuery.id = query.id
+            self.assertEqual(receivedQuery, query)
+            self.assertEqual(receivedResponse, response)
+
+
+        if self._protobufQueue.empty():
+            # let the protobuf messages the time to get there
+            time.sleep(1)
+        # check the protobuf message corresponding to the UDP query
+        msg = self.getFirstProtobufMessage()
+        self.checkProtobufQuery(msg, dnsmessage_pb2.PBDNSMessage.UDP, query, dns.rdataclass.IN, dns.rdatatype.A, name)
+
+        if self._protobufQueue.empty():
+            # let the protobuf messages the time to get there
+            time.sleep(1)
+        # TCP query
+        msg = self.getFirstProtobufMessage()
+        self.checkProtobufQuery(msg, dnsmessage_pb2.PBDNSMessage.TCP, query, dns.rdataclass.IN, dns.rdatatype.A, name)

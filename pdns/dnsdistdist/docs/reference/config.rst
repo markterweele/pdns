@@ -46,6 +46,14 @@ Global configuration
   Note that this does not grant the capabilities to the process, doing so might be done by running it as root which we don't advise, or by adding capabilities via the systemd unit file, for example.
   Please also be aware that switching to a different user via ``--uid`` will still drop all capabilities.
 
+.. function:: enableLuaConfiguration()
+
+  .. versionadded:: 2.0.0
+
+  Enable using Lua configuration directives along with a YAML configuration file. By default, when a YAML configuration file is used, any Lua configuration file used along the YAML configuration should only contain functions, and ideally even those should be defined either inline in the YAML file or in separate files included from the YAML configuration, for clarity.
+  It is strongly advised not to use this directive unless absolutely necessary, and to prefer doing all the configuration in either Lua or YAML but to not mix them.
+  Note that Lua directives that can be used at runtime are always available via the :doc:`../guides/console`, regardless of whether they are enabled during configuration.
+
 .. function:: includeDirectory(path)
 
   Include configuration files from ``path``.
@@ -265,7 +273,7 @@ Listen Sockets
   * ``reusePort=false``: bool - Set the ``SO_REUSEPORT`` socket option.
   * ``tcpFastOpenQueueSize=0``: int - Set the TCP Fast Open queue size, enabling TCP Fast Open when available and the value is larger than 0.
   * ``interface=""``: str - Set the network interface to use.
-  * ``cpus={}``: table - Set the CPU affinity for this listener thread, asking the scheduler to run it on a single CPU id, or a set of CPU ids. This parameter is only available if the OS provides the pthread_setaffinity_np() function.
+  * ``cpus={}``: table - Set the CPU affinity for this listener thread, asking the scheduler to run it on a single CPU id, or a set of CPU ids. This parameter is only available if the OS provides the ``pthread_setaffinity_np()`` function.
   * ``provider``: str - The TLS library to use between GnuTLS and OpenSSL, if they were available and enabled at compilation time. Default is to use OpenSSL when available.
   * ``ciphers``: str - The TLS ciphers to use. The exact format depends on the provider used. When the OpenSSL provider is used, ciphers for TLS 1.3 must be specified via ``ciphersTLS13``.
   * ``ciphersTLS13``: str - The ciphers to use for TLS 1.3, when the OpenSSL provider is used. When the GnuTLS provider is used, ``ciphers`` applies regardless of the TLS protocol and this setting is not used.
@@ -687,13 +695,14 @@ Servers
     ``qps``                                  ``number``            "Limit the number of queries per second to ``number``, when using the `firstAvailable` policy"
     ``order``                                ``number``            "The order of this server, used by the `leastOutstanding` and `firstAvailable` policies"
     ``weight``                               ``number``            "The weight of this server, used by the `wrandom`, `whashed` and `chashed` policies, default: 1. Supported values are a minimum of 1, and a maximum of 2147483647."
+    ``udpTimeout``                           ``number``            "The timeout (in seconds) of a UDP query attempt"
     ``pool``                                 ``string|{string}``   "The pools this server belongs to (unset or empty string means default pool) as a string or table of strings"
     ``retries``                              ``number``            "The number of TCP connection attempts to the backend, for a given query"
     ``tcpConnectTimeout``                    ``number``            "The timeout (in seconds) of a TCP connection attempt"
     ``tcpSendTimeout``                       ``number``            "The timeout (in seconds) of a TCP write attempt"
     ``tcpRecvTimeout``                       ``number``            "The timeout (in seconds) of a TCP read attempt"
     ``tcpFastOpen``                          ``bool``              "Whether to enable TCP Fast Open"
-    ``ipBindAddrNoPort``                     ``bool``              "Whether to enable IP_BIND_ADDRESS_NO_PORT if available, default: true"
+    ``ipBindAddrNoPort``                     ``bool``              "Whether to enable ``IP_BIND_ADDRESS_NO_PORT`` if available, default: true"
     ``name``                                 ``string``            "The name associated to this backend, for display purpose"
     ``checkClass``                           ``number``            "Use ``number`` as QCLASS in the health-check query, default: DNSClass.IN"
     ``checkName``                            ``string``            "Use ``string`` as QNAME in the health-check query, default: ``""a.root-servers.net.""`` "
@@ -1226,6 +1235,9 @@ Status, Statistics and More
 
 .. function:: getTLSContext(idx)
 
+  .. versionchanged:: 2.0.0
+    This directive was removed in version 2.0.0, see :func:`getTLSFrontend` instead.
+
   Return the TLSContext object for the context of index ``idx``.
 
 .. function:: getTLSFrontend(idx)
@@ -1424,13 +1436,25 @@ Status, Statistics and More
 
 .. function:: showTLSContexts()
 
-  Print the list of all available DNS over TLS contexts.
+  .. versionchanged:: 2.0.0
+    This function has been renamed to :func:`showTLSFrontends`.
+
+  Print the list of all available DNS over TLS frontends.
 
 .. function:: showTLSErrorCounters()
 
   .. versionadded:: 1.4.0
 
   Display metrics about TLS handshake failures.
+
+.. function:: showTLSContexts()
+
+  .. versionadded:: 2.0.0
+
+  .. note::
+    Before 2.0.0 this function was called ``showTLSContexts``.
+
+  Print the list of all available DNS over TLS frontends.
 
 .. function:: showVersion()
 
@@ -2508,6 +2532,9 @@ TLSContext
 ~~~~~~~~~~
 
 .. class:: TLSContext
+
+  .. versionchanged:: 2.0.0
+    This class has been removed in version 2.0.0.
 
   This object represents an address and port dnsdist is listening on for DNS over TLS queries.
 

@@ -104,7 +104,7 @@ std::pair<uint32_t, uint32_t> LMDBBackend::getSchemaVersionAndShards(std::string
   MDB_dbi dbi;
 
   {
-    int retCode = mdb_dbi_open(txn, "pdns", 0, &dbi);
+    int retCode = MDBDbi::mdb_dbi_open(txn, "pdns", 0, &dbi);
     if (retCode != 0) {
       if (retCode == MDB_NOTFOUND) {
         // this means nothing has been inited yet
@@ -432,7 +432,7 @@ bool LMDBBackend::upgradeToSchemav5(std::string& filename)
 
     MDB_dbi shdbi = 0;
 
-    const auto dbiOpenRc = mdb_dbi_open(shtxn, "records", 0, &shdbi);
+    const auto dbiOpenRc = MDBDbi::mdb_dbi_open(shtxn, "records", 0, &shdbi);
     if (dbiOpenRc != 0) {
       if (dbiOpenRc == MDB_NOTFOUND) {
         mdb_txn_abort(shtxn);
@@ -446,7 +446,7 @@ bool LMDBBackend::upgradeToSchemav5(std::string& filename)
 
     MDB_dbi shdbi2 = 0;
 
-    if (mdb_dbi_open(shtxn, "records_v5", MDB_CREATE, &shdbi2) != 0) {
+    if (MDBDbi::mdb_dbi_open(shtxn, "records_v5", MDB_CREATE, &shdbi2) != 0) {
       mdb_dbi_close(shenv, shdbi);
       mdb_txn_abort(shtxn);
       mdb_env_close(shenv);
@@ -480,14 +480,14 @@ bool LMDBBackend::upgradeToSchemav5(std::string& filename)
     std::string tdbname = dbname + "_v5";
 
     // NOLINTNEXTLINE(cppcoreguidelines-pro-bounds-constant-array-index)
-    if (mdb_dbi_open(txn, dbname.c_str(), 0, &fromtypeddbi[index]) != 0) {
+    if (MDBDbi::mdb_dbi_open(txn, dbname.c_str(), 0, &fromtypeddbi[index]) != 0) {
       mdb_txn_abort(txn);
       mdb_env_close(env);
-      throw std::runtime_error("mdb_dbi_open typeddbi failed");
+      throw std::runtime_error("MDBDbi::mdb_dbi_open typeddbi failed");
     }
 
     // NOLINTNEXTLINE(cppcoreguidelines-pro-bounds-constant-array-index)
-    if (mdb_dbi_open(txn, tdbname.c_str(), MDB_CREATE, &totypeddbi[index]) != 0) {
+    if (MDBDbi::mdb_dbi_open(txn, tdbname.c_str(), MDB_CREATE, &totypeddbi[index]) != 0) {
       // NOLINTNEXTLINE(cppcoreguidelines-pro-bounds-constant-array-index)
       mdb_dbi_close(env, fromtypeddbi[index]);
       mdb_txn_abort(txn);
@@ -527,14 +527,14 @@ bool LMDBBackend::upgradeToSchemav5(std::string& filename)
     std::string tdbname = dbname + "_v5_0";
 
     // NOLINTNEXTLINE(cppcoreguidelines-pro-bounds-constant-array-index)
-    if (mdb_dbi_open(txn, fdbname.c_str(), 0, &fromindexdbi[index]) != 0) {
+    if (MDBDbi::mdb_dbi_open(txn, fdbname.c_str(), 0, &fromindexdbi[index]) != 0) {
       mdb_txn_abort(txn);
       mdb_env_close(env);
       throw std::runtime_error("mdb_dbi_open indexdbi failed");
     }
 
     // NOLINTNEXTLINE(cppcoreguidelines-pro-bounds-constant-array-index)
-    if (mdb_dbi_open(txn, tdbname.c_str(), MDB_CREATE, &toindexdbi[index]) != 0) {
+    if (MDBDbi::mdb_dbi_open(txn, tdbname.c_str(), MDB_CREATE, &toindexdbi[index]) != 0) {
       // NOLINTNEXTLINE(cppcoreguidelines-pro-bounds-constant-array-index)
       mdb_dbi_close(env, fromindexdbi[index]);
       mdb_txn_abort(txn);
@@ -566,7 +566,7 @@ bool LMDBBackend::upgradeToSchemav5(std::string& filename)
   MDB_dbi dbi = 0;
 
   // finally, migrate the pdns db
-  if (mdb_dbi_open(txn, "pdns", 0, &dbi) != 0) {
+  if (MDBDbi::mdb_dbi_open(txn, "pdns", 0, &dbi) != 0) {
     mdb_txn_abort(txn);
     mdb_env_close(env);
     throw std::runtime_error("mdb_dbi_open pdns failed");
@@ -738,7 +738,7 @@ LMDBBackend::LMDBBackend(const std::string& suffix)
         throw std::runtime_error("Somehow, we are not at schema version 5. Giving up");
       }
 
-      d_tdomains = std::make_shared<tdomains_t>(getMDBEnv(getArg("filename").c_str(), MDB_NOSUBDIR | d_asyncFlag, 0600, mapSize), "domains_v5");
+      d_tdomains = std::make_shared<tdomains_t>(getMDBEnv(getArg("filename").c_str(), MDB_NOSUBDIR | MDB_NORDAHEAD | d_asyncFlag, 0600, mapSize), "domains_v5");
       d_tmeta = std::make_shared<tmeta_t>(d_tdomains->getEnv(), "metadata_v5");
       d_tkdb = std::make_shared<tkdb_t>(d_tdomains->getEnv(), "keydata_v5");
       d_ttsig = std::make_shared<ttsig_t>(d_tdomains->getEnv(), "tsig_v5");
@@ -800,13 +800,30 @@ LMDBBackend::LMDBBackend(const std::string& suffix)
   }
 
   if (!opened) {
-    d_tdomains = std::make_shared<tdomains_t>(getMDBEnv(getArg("filename").c_str(), MDB_NOSUBDIR | d_asyncFlag, 0600, mapSize), "domains_v5");
+    d_tdomains = std::make_shared<tdomains_t>(getMDBEnv(getArg("filename").c_str(), MDB_NOSUBDIR | MDB_NORDAHEAD | d_asyncFlag, 0600, mapSize), "domains_v5");
     d_tmeta = std::make_shared<tmeta_t>(d_tdomains->getEnv(), "metadata_v5");
     d_tkdb = std::make_shared<tkdb_t>(d_tdomains->getEnv(), "keydata_v5");
     d_ttsig = std::make_shared<ttsig_t>(d_tdomains->getEnv(), "tsig_v5");
   }
   d_trecords.resize(s_shards);
   d_dolog = ::arg().mustDo("query-logging");
+}
+
+LMDBBackend::~LMDBBackend()
+{
+  // LMDB internals require that, if we have multiple transactions active,
+  // we destroy them in the reverse order of their creation, thus we can't
+  // let the default destructor take care of d_rotxn and d_rwtxn.
+  if (d_txnorder) {
+    // RO transaction more recent than RW transaction
+    d_rotxn.reset();
+    d_rwtxn.reset();
+  }
+  else {
+    // RW transaction more recent than RO transaction
+    d_rwtxn.reset();
+    d_rotxn.reset();
+  }
 }
 
 namespace boost
@@ -821,7 +838,7 @@ namespace serialization
       ar& std::string();
     }
     else {
-      ar& g.toDNSStringLC();
+      ar & g.toDNSStringLC();
     }
   }
 
@@ -829,7 +846,7 @@ namespace serialization
   void load(Archive& ar, DNSName& g, const unsigned int /* version */)
   {
     string tmp;
-    ar& tmp;
+    ar & tmp;
     if (tmp.empty()) {
       g = DNSName();
     }
@@ -841,44 +858,44 @@ namespace serialization
   template <class Archive>
   void save(Archive& ar, const QType& g, const unsigned int /* version */)
   {
-    ar& g.getCode();
+    ar & g.getCode();
   }
 
   template <class Archive>
   void load(Archive& ar, QType& g, const unsigned int /* version */)
   {
     uint16_t tmp;
-    ar& tmp;
+    ar & tmp;
     g = QType(tmp);
   }
 
   template <class Archive>
   void save(Archive& ar, const DomainInfo& g, const unsigned int /* version */)
   {
-    ar& g.zone;
-    ar& g.last_check;
-    ar& g.account;
-    ar& g.primaries;
-    ar& g.id;
-    ar& g.notified_serial;
-    ar& g.kind;
-    ar& g.options;
-    ar& g.catalog;
+    ar & g.zone;
+    ar & g.last_check;
+    ar & g.account;
+    ar & g.primaries;
+    ar & g.id;
+    ar & g.notified_serial;
+    ar & g.kind;
+    ar & g.options;
+    ar & g.catalog;
   }
 
   template <class Archive>
   void load(Archive& ar, DomainInfo& g, const unsigned int version)
   {
-    ar& g.zone;
-    ar& g.last_check;
-    ar& g.account;
-    ar& g.primaries;
-    ar& g.id;
-    ar& g.notified_serial;
-    ar& g.kind;
+    ar & g.zone;
+    ar & g.last_check;
+    ar & g.account;
+    ar & g.primaries;
+    ar & g.id;
+    ar & g.notified_serial;
+    ar & g.kind;
     if (version >= 1) {
-      ar& g.options;
-      ar& g.catalog;
+      ar & g.options;
+      ar & g.catalog;
     }
     else {
       g.options.clear();
@@ -889,21 +906,21 @@ namespace serialization
   template <class Archive>
   void serialize(Archive& ar, LMDBBackend::DomainMeta& g, const unsigned int /* version */)
   {
-    ar& g.domain& g.key& g.value;
+    ar & g.domain & g.key & g.value;
   }
 
   template <class Archive>
   void save(Archive& ar, const LMDBBackend::KeyDataDB& g, const unsigned int /* version */)
   {
-    ar& g.domain& g.content& g.flags& g.active& g.published;
+    ar & g.domain & g.content & g.flags & g.active & g.published;
   }
 
   template <class Archive>
   void load(Archive& ar, LMDBBackend::KeyDataDB& g, const unsigned int version)
   {
-    ar& g.domain& g.content& g.flags& g.active;
+    ar & g.domain & g.content & g.flags & g.active;
     if (version >= 1) {
-      ar& g.published;
+      ar & g.published;
     }
     else {
       g.published = true;
@@ -913,9 +930,9 @@ namespace serialization
   template <class Archive>
   void serialize(Archive& ar, TSIGKey& g, const unsigned int /* version */)
   {
-    ar& g.name;
-    ar& g.algorithm; // this is the ordername
-    ar& g.key;
+    ar & g.name;
+    ar & g.algorithm; // this is the ordername
+    ar & g.key;
   }
 
 } // namespace serialization
@@ -1073,6 +1090,7 @@ bool LMDBBackend::startTransaction(const DNSName& domain, int domain_id)
     throw DBException("Attempt to start a transaction while one was open already");
   }
   d_rwtxn = getRecordsRWTransaction(real_id);
+  d_txnorder = false;
 
   d_transactiondomain = domain;
   d_transactiondomainid = real_id;
@@ -1225,6 +1243,7 @@ bool LMDBBackend::replaceRRSet(uint32_t domain_id, const DNSName& qname, const Q
 
   if (!rrset.empty()) {
     vector<LMDBResourceRecord> adjustedRRSet;
+    adjustedRRSet.reserve(rrset.size());
     for (const auto& rr : rrset) {
       LMDBResourceRecord lrr(rr);
       lrr.content = serializeContent(lrr.qtype.getCode(), lrr.qname, lrr.content);
@@ -1254,7 +1273,7 @@ std::shared_ptr<LMDBBackend::RecordsRWTransaction> LMDBBackend::getRecordsRWTran
   auto& shard = d_trecords[id % s_shards];
   if (!shard.env) {
     shard.env = getMDBEnv((getArg("filename") + "-" + std::to_string(id % s_shards)).c_str(),
-                          MDB_NOSUBDIR | d_asyncFlag, 0600);
+                          MDB_NOSUBDIR | MDB_NORDAHEAD | d_asyncFlag, 0600);
     shard.dbi = shard.env->openDB("records_v5", MDB_CREATE);
   }
   auto ret = std::make_shared<RecordsRWTransaction>(shard.env->getRWTransaction());
@@ -1271,7 +1290,7 @@ std::shared_ptr<LMDBBackend::RecordsROTransaction> LMDBBackend::getRecordsROTran
       throw DBException("attempting to start nested transaction without open parent env");
     }
     shard.env = getMDBEnv((getArg("filename") + "-" + std::to_string(id % s_shards)).c_str(),
-                          MDB_NOSUBDIR | d_asyncFlag, 0600);
+                          MDB_NOSUBDIR | MDB_NORDAHEAD | d_asyncFlag, 0600);
     shard.dbi = shard.env->openDB("records_v5", MDB_CREATE);
   }
 
@@ -1442,16 +1461,14 @@ bool LMDBBackend::list(const DNSName& target, int /* id */, bool include_disable
   }
 
   d_rotxn = getRecordsROTransaction(di.id, d_rwtxn);
+  d_txnorder = true;
   d_getcursor = std::make_shared<MDBROCursor>(d_rotxn->txn->getCursor(d_rotxn->db->dbi));
 
   compoundOrdername co;
   d_matchkey = co(di.id);
 
   MDBOutVal key, val;
-  auto a = d_getcursor->lower_bound(d_matchkey, key, val);
-  auto b0 = key.getNoStripHeader<StringView>();
-  auto b = b0.rfind(d_matchkey, 0);
-  if (a || b != 0) {
+  if (d_getcursor->prefix(d_matchkey, key, val) != 0) {
     d_getcursor.reset();
   }
 
@@ -1502,6 +1519,7 @@ void LMDBBackend::lookup(const QType& type, const DNSName& qdomain, int zoneId, 
   }
   // cout<<"get will look for "<<relqname<< " in zone "<<hunt<<" with id "<<zoneId<<" and type "<<type.toString()<<endl;
   d_rotxn = getRecordsROTransaction(zoneId, d_rwtxn);
+  d_txnorder = true;
 
   compoundOrdername co;
   d_getcursor = std::make_shared<MDBROCursor>(d_rotxn->txn->getCursor(d_rotxn->db->dbi));
@@ -1513,7 +1531,7 @@ void LMDBBackend::lookup(const QType& type, const DNSName& qdomain, int zoneId, 
     d_matchkey = co(zoneId, relqname, type.getCode());
   }
 
-  if (d_getcursor->lower_bound(d_matchkey, key, val) || key.getNoStripHeader<StringView>().rfind(d_matchkey, 0) != 0) {
+  if (d_getcursor->prefix(d_matchkey, key, val) != 0) {
     d_getcursor.reset();
     if (d_dolog) {
       g_log << Logger::Warning << "Query " << ((long)(void*)this) << ": " << d_dtime.udiffNoReset() << " us to execute (found nothing)" << endl;
@@ -1551,7 +1569,7 @@ bool LMDBBackend::get(DNSZoneRecord& zr)
 
       if (zr.dr.d_type == QType::NSEC3) {
         // Hit a magic NSEC3 skipping
-        if (d_getcursor->next(d_currentKey, d_currentVal) || d_currentKey.getNoStripHeader<StringView>().rfind(d_matchkey, 0) != 0) {
+        if (d_getcursor->next(d_currentKey, d_currentVal) != 0) {
           // cerr<<"resetting d_getcursor 1"<<endl;
           d_getcursor.reset();
         }
@@ -1579,7 +1597,7 @@ bool LMDBBackend::get(DNSZoneRecord& zr)
 
       if (d_currentrrsetpos >= d_currentrrset.size()) {
         d_currentrrset.clear(); // will invalidate lrr
-        if (d_getcursor->next(d_currentKey, d_currentVal) || d_currentKey.getNoStripHeader<StringView>().rfind(d_matchkey, 0) != 0) {
+        if (d_getcursor->next(d_currentKey, d_currentVal) != 0) {
           // cerr<<"resetting d_getcursor 2"<<endl;
           d_getcursor.reset();
         }
@@ -1795,8 +1813,6 @@ void LMDBBackend::getAllDomainsFiltered(vector<DomainInfo>* domains, const std::
 
 void LMDBBackend::getAllDomains(vector<DomainInfo>* domains, bool /* doSerial */, bool include_disabled)
 {
-  domains->clear();
-
   getAllDomainsFiltered(domains, [this, include_disabled](DomainInfo& di) {
     if (!getSerial(di) && !include_disabled) {
       return false;
@@ -2466,7 +2482,7 @@ bool LMDBBackend::updateDNSSECOrderNameAndAuth(uint32_t domain_id, const DNSName
 
   auto cursor = txn->txn->getCursor(txn->db->dbi);
   MDBOutVal key, val;
-  if (cursor.lower_bound(matchkey, key, val)) {
+  if (cursor.prefix(matchkey, key, val) != 0) {
     // cout << "Could not find anything"<<endl;
     return false;
   }
@@ -2474,13 +2490,14 @@ bool LMDBBackend::updateDNSSECOrderNameAndAuth(uint32_t domain_id, const DNSName
   bool hasOrderName = !ordername.empty();
   bool needNSEC3 = hasOrderName;
 
-  for (; key.getNoStripHeader<StringView>().rfind(matchkey, 0) == 0;) {
+  do {
     vector<LMDBResourceRecord> lrrs;
 
     if (co.getQType(key.getNoStripHeader<StringView>()) != QType::NSEC3) {
       deserializeFromBuffer(val.get<StringView>(), lrrs);
       bool changed = false;
       vector<LMDBResourceRecord> newRRs;
+      newRRs.reserve(lrrs.size());
       for (auto& lrr : lrrs) {
         lrr.qtype = co.getQType(key.getNoStripHeader<StringView>());
         if (!needNSEC3 && qtype != QType::ANY) {
@@ -2499,9 +2516,7 @@ bool LMDBBackend::updateDNSSECOrderNameAndAuth(uint32_t domain_id, const DNSName
       }
     }
 
-    if (cursor.next(key, val))
-      break;
-  }
+  } while (cursor.next(key, val) == 0);
 
   bool del = false;
   LMDBResourceRecord lrr;
@@ -2668,8 +2683,34 @@ bool LMDBBackend::getTSIGKeys(std::vector<struct TSIGKey>& keys)
   auto txn = d_ttsig->getROTransaction();
 
   keys.clear();
-  for (auto iter = txn.begin(); iter != txn.end(); ++iter) {
-    keys.push_back(*iter);
+  // In a perfect world, we would simply iterate over txn and add every
+  // item to the returned vector:
+  //   for (auto iter = txn.begin(); iter != txn.end(); ++iter) {
+  //     keys.push_back(*iter);
+  //   }
+  // But databases converted from older (< 5) schemas _may_ have multiple
+  // entries for the same TSIG key name and algorithm, something which is not
+  // allowed in the v5 database schema. These extra entries will not be found
+  // by get_multi<> during regular operations, and would only appear in the
+  // results of this method.
+  // In order to prevent this, we first only gather the list of key names, and
+  // in a second step, query for them using a similar logic as getTSIGKey().
+  // Unfortunately, there does not seem to be a way to know if the database had
+  // been created using the v5 schema (not converted), in which case we could
+  // use the above, simpler logic.
+  std::unordered_set<DNSName> keynames;
+  for (const auto& iter : txn) {
+    keynames.insert(iter.name);
+  }
+  for (const auto& iter : keynames) {
+    LmdbIdVec ids;
+    txn.get_multi<0>(iter, ids);
+    for (auto key_id : ids) {
+      TSIGKey key;
+      if (txn.get(key_id, key)) {
+        keys.push_back(key);
+      }
+    }
   }
   return true;
 }
@@ -2803,6 +2844,16 @@ string LMDBBackend::directBackendCmd(const string& query)
   }
 
   return "unknown lmdbbackend command\n";
+}
+
+bool LMDBBackend::hasCreatedLocalFiles() const
+{
+  // Since the lmdb file creation counter is global, if multiple LMDB backends
+  // are used, they may end up all reporting having created files even if
+  // not all of them did.
+  // But since this information is for the sake of pdnsutil, this is not
+  // really a problem.
+  return MDBDbi::d_creationCount != 0;
 }
 
 class LMDBFactory : public BackendFactory

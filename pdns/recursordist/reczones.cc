@@ -32,13 +32,9 @@
 #include "logger.hh"
 #include "syncres.hh"
 #include "zoneparser-tng.hh"
-#include "settings/cxxsettings.hh"
+#include "rec-rust-lib/cxxsettings.hh"
 #include "rec-system-resolve.hh"
-
-// XXX consider including rec-main.hh?
-extern int g_argc;
-extern char** g_argv;
-extern string g_yamlSettingsSuffix;
+#include "rec-main.hh"
 
 bool primeHints(time_t now)
 {
@@ -69,6 +65,9 @@ static void convertServersForAD(const std::string& zone, const std::string& inpu
 {
   vector<string> servers;
   stringtok(servers, input, sepa);
+  if (servers.empty()) {
+    throw PDNSException("empty list of forwarders for domain '" + zone + '"');
+  }
   authDomain.d_servers.clear();
 
   vector<string> addresses;
@@ -112,7 +111,6 @@ static void* pleaseUseNewSDomainsMap(std::shared_ptr<SyncRes::domainmap_t> newma
 
 string reloadZoneConfiguration(bool yaml)
 {
-  std::shared_ptr<SyncRes::domainmap_t> original = SyncRes::getDomainMap();
   auto log = g_slog->withName("config");
 
   string configname = ::arg()["config-dir"] + "/recursor";
@@ -199,9 +197,12 @@ string reloadZoneConfiguration(bool yaml)
       oldAndNewDomains.insert(entry.first);
     }
 
-    if (original) {
-      for (const auto& entry : *original) {
-        oldAndNewDomains.insert(entry.first);
+    {
+      auto lock = g_initialDomainMap.lock();
+      if (*lock) {
+        for (const auto& entry : **lock) {
+          oldAndNewDomains.insert(entry.first);
+        }
       }
     }
 
@@ -217,6 +218,8 @@ string reloadZoneConfiguration(bool yaml)
     for (const auto& entry : oldAndNewDomains) {
       wipeCaches(entry, true, 0xffff);
     }
+    *g_initialDomainMap.lock() = std::move(newDomainMap);
+    *g_initialAllowNotifyFor.lock() = std::move(newNotifySet);
     return "ok\n";
   }
   catch (const std::exception& e) {
@@ -296,9 +299,7 @@ static void processApiZonesFile(const string& file, shared_ptr<SyncRes::domainma
     return;
   }
   const auto filename = ::arg()["api-config-dir"] + "/" + file;
-  struct stat statStruct
-  {
-  };
+  struct stat statStruct{};
   // It's a TOCTU, but a harmless one
   if (stat(filename.c_str(), &statStruct) != 0) {
     return;
@@ -414,6 +415,9 @@ static void processForwardZonesFile(shared_ptr<SyncRes::domainmap_t>& newMap, sh
 
       try {
         convertServersForAD(domain, instructions, authDomain, ",; ", log, false);
+      }
+      catch (const PDNSException& e) {
+        throw PDNSException(e.reason + "on line " + std::to_string(linenum) + " of " + filename);
       }
       catch (...) {
         throw PDNSException("Conversion error parsing line " + std::to_string(linenum) + " of " + filename);

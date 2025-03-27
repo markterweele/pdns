@@ -44,6 +44,7 @@ subdir('meson' / 'mmap')                    # Check for mmap
 subdir('meson' / 'libsodium')               # Libsodium-based signers
 subdir('meson' / 'libcrypto')               # OpenSSL-based signers
 subdir('meson' / 'libssl')                  # OpenSSL libssl
+subdir('meson' / 'libssl-engines')          # OpenSSL libssl engines
 subdir('meson' / 'gnutls')                  # GnuTLS
 subdir('meson' / 'dot')                     # DNS over TLS
 subdir('meson' / 'ipcipher')                # IPCipher
@@ -135,7 +136,7 @@ deps = [
   dep_dlopen,
   dep_pkcs11,
   dep_gss_tsig,
-  dep_systemd,
+  dep_libsystemd,
   dep_arc4random,
   dep_ipcrypt,
   dep_json11,
@@ -157,7 +158,7 @@ deps = [
   dep_boost_test,
 ]
 
-if dep_systemd.found()
+if dep_systemd_prog.found()
   systemd_service_conf = configuration_data()
   systemd_service_conf.set('BinDir', get_option('prefix') / get_option('bindir'))
   systemd_service_conf.set('StaticBinDir', get_option('prefix') / get_option('sbindir'))
@@ -412,10 +413,6 @@ conditional_sources = {
   'lua-record': {
     'sources': [src_dir / 'lua-record.cc'],
     'condition': dep_lua_records.found(),
-  },
-  'standalone-fuzz-target-runner': {
-    'sources': [src_dir / 'standalone_fuzz_target_runner.cc'],
-    'condition': get_option('fuzz-targets'),
   },
 }
 
@@ -928,6 +925,15 @@ if get_option('unit-tests')
 endif
 
 if get_option('fuzz-targets')
+  fuzz_extra_sources = []
+  fuzzer_ldflags = []
+  # https://github.com/harfbuzz/harfbuzz/pull/2549/files
+  if get_option('fuzzer_ldflags') == ''
+    fuzz_extra_sources += src_dir / 'standalone_fuzz_target_runner.cc'
+  else
+    fuzzer_ldflags += get_option('fuzzer_ldflags')
+  endif
+
   fuzz_targets = [
     'moadnsparser',
     'packetcache',
@@ -940,7 +946,9 @@ if get_option('fuzz-targets')
   foreach target: fuzz_targets
     source_file = src_dir / 'fuzz_' + target.underscorify() + '.cc'
     tools += {
-      'fuzz-target-' + target: { 'main': source_file }
+      'fuzz-target-' + target: { 'main': source_file,
+                                 'link-args': fuzzer_ldflags,
+                                 'files-extra': fuzz_extra_sources }
     }
   endforeach
 endif
@@ -968,6 +976,7 @@ foreach tool, info: tools
   export_dynamic = 'export-dynamic' in info ? info['export-dynamic'] : false
   files_extra = 'files-extra' in info ? info['files-extra'] : []
   deps_extra = 'deps-extra' in info ? info['deps-extra'] : []
+  link_args = 'link-args' in info ? info['link-args'] : []
 
   set_variable(
     var_name,
@@ -977,6 +986,7 @@ foreach tool, info: tools
       config_h,
       files_extra,
       export_dynamic: export_dynamic,
+      link_args: link_args,
       dependencies: [
         deps,
         libpdns_common,
@@ -1002,16 +1012,30 @@ summary('Path', python.full_path(), section: 'Manual Pages')
 summary('Version', python.version(), section: 'Manual Pages')
 
 if python.found()
-  run_target(
-    'man-pages',
-    command: [
-      python,
-      product_source_dir / docs_dir / 'generate-man-pages.py',
-      '--venv-name', 'venv-auth-man-pages',
-      '--requirements-file', docs_dir / 'requirements.txt',
-      '--source-directory', docs_dir,
-      '--target-directory', 'auth-man-pages',
-    ] + man_pages,
+  generated_man_pages = []
+  foreach tool, info: tools
+    if 'manpages' in info
+      foreach man_page: info['manpages']
+        generated_man_pages += man_page
+      endforeach
+    endif
+  endforeach
+  custom_target(
+     'man-pages',
+     input: man_pages,
+     output: generated_man_pages,
+     install: true,
+     install_dir: join_paths(get_option('mandir'), 'man1'),
+     command: [
+       python,
+       product_source_dir / docs_dir / 'generate-man-pages.py',
+       '--build-root', '@BUILD_ROOT@',
+       '--source-root', '@SOURCE_ROOT@',
+       '--venv-name', 'venv-auth-man-pages',
+       '--requirements-file', docs_dir / 'requirements.txt',
+       '--source-directory', docs_dir,
+       '--target-directory', '@BUILD_ROOT@',
+     ] + man_pages,
   )
 endif
 
@@ -1099,4 +1123,52 @@ if get_option('unit-tests-backends')
       )
     endif
   endforeach
+endif
+
+if python.found()
+  html_docs = custom_target(
+    'html-docs',
+    command: [
+        python,
+        product_source_dir / docs_dir / 'generate-docs.py',
+        '--build-root', '@BUILD_ROOT@',
+        '--source-root', '@SOURCE_ROOT@',
+        '--venv-name', 'venv-docs',
+        '--requirements-file', docs_dir / 'requirements.txt',
+        '--source-directory', docs_dir,
+        '--target-directory', '@BUILD_ROOT@' / 'html-docs',
+    ],
+    output: 'sphinx.stamp',
+    console: true,
+    depfile: 'sphinx.d',
+  )
+
+  docs_tarball = custom_target(
+    'html-docs.tar.bz2',
+    command: ['tar', 'cjf', 'html-docs.tar.bz2', html_docs],
+    output: 'html-docs.tar.bz2',
+  )
+
+  pdf_docs = custom_target(
+    command: [
+        python,
+        product_source_dir / docs_dir / 'generate-docs.py',
+        '--build-root', '@BUILD_ROOT@',
+        '--source-root', '@SOURCE_ROOT@',
+        '--venv-name', 'venv-docs',
+        '--requirements-file', docs_dir / 'requirements.txt',
+        '--source-directory', docs_dir,
+        '--target-directory', '@BUILD_ROOT@',
+        '--pdf-name', 'PowerDNS-Authoritative.pdf',
+    ],
+    output: 'PowerDNS-Authoritative.pdf',
+    console: true,
+    depfile: 'sphinx.d',
+  )
+
+  run_target(
+    'all-docs',
+    # args mentioned in command line become auto-dependency
+    command: ['echo', 'Generated', html_docs, docs_tarball, pdf_docs],
+  )
 endif

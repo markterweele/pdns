@@ -202,22 +202,28 @@ public:
   virtual std::string getZoneRepresentation(bool noDot=false) const = 0;
   virtual ~DNSRecordContent() = default;
   virtual void toPacket(DNSPacketWriter& pw) const = 0;
-  // returns the wire format of the content, possibly including compressed pointers pointing to the owner name (unless canonic or lowerCase are set)
-  string serialize(const DNSName& qname, bool canonic=false, bool lowerCase=false) const
+  // returns the wire format of the content or the full record, possibly including compressed pointers pointing to the owner name (unless canonic or lowerCase are set)
+  [[nodiscard]] string serialize(const DNSName& qname, bool canonic = false, bool lowerCase = false, bool full = false) const
   {
     vector<uint8_t> packet;
-    DNSPacketWriter pw(packet, g_rootdnsname, 1);
-    if(canonic)
-      pw.setCanonic(true);
+    DNSPacketWriter packetWriter(packet, g_rootdnsname, QType::A);
 
-    if(lowerCase)
-      pw.setLowercase(true);
+    if (canonic) {
+      packetWriter.setCanonic(true);
+    }
+    if (lowerCase) {
+      packetWriter.setLowercase(true);
+    }
 
-    pw.startRecord(qname, this->getType());
-    this->toPacket(pw);
+    packetWriter.startRecord(qname, getType());
+    toPacket(packetWriter);
 
     string record;
-    pw.getRecordPayload(record); // needs to be called before commit()
+    if (full) {
+      packetWriter.getWireFormatContent(record); // needs to be called before commit()
+    } else {
+      packetWriter.getRecordPayload(record); // needs to be called before commit()
+    }
     return record;
   }
 
@@ -286,6 +292,8 @@ public:
   {
     d_locked.store(true);
   }
+
+  [[nodiscard]] virtual size_t sizeEstimate() const = 0;
 
 protected:
   typedef std::map<std::pair<uint16_t, uint16_t>, makerfunc_t* > typemap_t;
@@ -427,6 +435,11 @@ public:
 
     return *d_content == *rhs.d_content;
   }
+
+  [[nodiscard]] size_t sizeEstimate() const
+  {
+    return sizeof(*this) + d_name.sizeEstimate() + (d_content ? d_content->sizeEstimate() : 0U);
+  }
 };
 
 struct DNSZoneRecord
@@ -438,6 +451,10 @@ struct DNSZoneRecord
   bool auth{true};
   bool disabled{false};
   DNSRecord dr;
+
+  bool operator<(const DNSZoneRecord& other) const {
+    return dr.d_ttl < other.dr.d_ttl;
+  }
 };
 
 class UnknownRecordContent : public DNSRecordContent
@@ -461,6 +478,11 @@ public:
   const vector<uint8_t>& getRawContent() const
   {
     return d_record;
+  }
+
+  [[nodiscard]] size_t sizeEstimate() const override
+  {
+    return sizeof(*this) + d_dr.sizeEstimate() + d_record.size();
   }
 
 private:

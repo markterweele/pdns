@@ -36,7 +36,8 @@
 #include "base64.hh"
 #include "namespaces.hh"
 
-RecordTextReader::RecordTextReader(string  str, DNSName  zone) : d_string(std::move(str)), d_zone(std::move(zone)), d_pos(0)
+RecordTextReader::RecordTextReader(string str, DNSName zone) :
+  d_string(std::move(str)), d_zone(std::move(zone))
 {
    /* remove whitespace */
    if(!d_string.empty() && ( dns_isspace(*d_string.begin()) || dns_isspace(*d_string.rbegin()) ))
@@ -408,7 +409,7 @@ void RecordTextReader::xfrSvcParamKeyVals(set<SvcParam>& val) // NOLINT(readabil
       try {
         auto p = SvcParam(key, std::move(hints));
         p.setAutoHint(doAuto);
-        val.insert(p);
+        val.insert(std::move(p));
       }
       catch (const std::invalid_argument& e) {
         throw RecordTextException(e.what());
@@ -880,7 +881,7 @@ void RecordTextWriter::xfrSVCBValueList(const vector<string> &val) {
       }
       unescaped += ch;
     }
-    escaped.push_back(unescaped);
+    escaped.push_back(std::move(unescaped));
   }
   if (shouldQuote) {
     d_string.append(1, '"');

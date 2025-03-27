@@ -36,7 +36,10 @@ void DNSResourceRecord::setContent(const string &cont) {
     case QType::MX:
       if (content.size() >= 2 && *(content.rbegin()+1) == ' ')
         return;
-      /* Falls through. */
+      [[fallthrough]];
+#if !defined(RECURSOR)
+    case QType::ALIAS:
+#endif
     case QType::CNAME:
     case QType::DNAME:
     case QType::NS:
@@ -64,6 +67,9 @@ string DNSResourceRecord::getZoneRepresentation(bool noDot) const {
       if (*(last.rbegin()) != '.' && !noDot)
         ret << ".";
       break;
+#if !defined(RECURSOR)
+    case QType::ALIAS:
+#endif
     case QType::CNAME:
     case QType::DNAME:
     case QType::NS:
@@ -780,7 +786,7 @@ void SVCBBaseRecordContent::setHints(const SvcParam::SvcParamKey &key, const std
   try {
     auto newParam = SvcParam(key, std::move(h));
     d_params.erase(p);
-    d_params.insert(newParam);
+    d_params.insert(std::move(newParam));
   } catch (...) {
     // XXX maybe we should SERVFAIL instead?
     return;
@@ -812,11 +818,7 @@ SvcParam SVCBBaseRecordContent::getParam(const SvcParam::SvcParamKey &key) const
 }
 
 set<SvcParam>::const_iterator SVCBBaseRecordContent::getParamIt(const SvcParam::SvcParamKey &key) const {
-  auto p = std::find_if(d_params.begin(), d_params.end(),
-      [&key](const SvcParam &param) {
-        return param.getKey() == key;
-      });
-  return p;
+  return std::find(d_params.begin(), d_params.end(), key);
 }
 
 std::shared_ptr<SVCBBaseRecordContent> SVCBRecordContent::clone() const

@@ -40,9 +40,9 @@
 
 */
 
-
-template <typename Container> GenericDNSPacketWriter<Container>::GenericDNSPacketWriter(Container& content, const DNSName& qname, uint16_t  qtype, uint16_t qclass, uint8_t opcode)
-  : d_content(content), d_qname(qname), d_canonic(false), d_lowerCase(false)
+template <typename Container>
+GenericDNSPacketWriter<Container>::GenericDNSPacketWriter(Container& content, const DNSName& qname, uint16_t qtype, uint16_t qclass, uint8_t opcode) :
+  d_content(content), d_qname(qname)
 {
   d_content.clear();
   dnsheader dnsheader;
@@ -455,6 +455,12 @@ template <typename Container> void GenericDNSPacketWriter<Container>::xfrSvcPara
 template <typename Container> void GenericDNSPacketWriter<Container>::getRecordPayload(string& records)
 {
   records.assign(d_content.begin() + d_sor, d_content.end());
+}
+
+// call __before commit__
+template <typename Container> void GenericDNSPacketWriter<Container>::getWireFormatContent(string& record)
+{
+  record.assign(d_content.begin() + d_rollbackmarker, d_content.end());
 }
 
 template <typename Container> uint32_t GenericDNSPacketWriter<Container>::size() const

@@ -13,6 +13,9 @@
 #include <mutex>
 #include <vector>
 #include <algorithm>
+#include <string>
+#include <string_view>
+#include <atomic>
 #include <arpa/inet.h>
 
 #ifndef DNSDIST
@@ -22,6 +25,13 @@
 #endif
 
 using std::string_view;
+using std::string;
+
+#if BOOST_VERSION >= 106100
+#define StringView string_view
+#else
+#define StringView string
+#endif
 
 /* open issues:
  *
@@ -56,6 +66,9 @@ public:
   }
 
   MDB_dbi d_dbi;
+
+  static int mdb_dbi_open(MDB_txn *, const char *, unsigned int, MDB_dbi *);
+  static std::atomic<unsigned int> d_creationCount;
 };
 
 class MDBRWTransactionImpl;
@@ -324,6 +337,9 @@ public:
     return ret;
   }
 
+  template <class T>
+  T get() const;
+
   operator MDB_val&()
   {
     return d_mdbval;
@@ -339,6 +355,12 @@ private:
   char d_memory[sizeof(uint64_t)]{};
 #endif
 };
+
+template <>
+inline std::string MDBInVal::get<std::string>() const
+{
+  return {static_cast<char*>(d_mdbval.mv_data), d_mdbval.mv_size};
+}
 
 class MDBROCursor;
 
@@ -443,6 +465,7 @@ class MDBGenCursor
 private:
   std::vector<T*> *d_registry;
   MDB_cursor* d_cursor{nullptr};
+  std::string d_prefix{""};
 public:
   MDB_txn* d_txn{nullptr}; // ew, public
   uint64_t d_txtime{0};
@@ -551,6 +574,9 @@ private:
 
     while (true) {
       auto sval = data.getNoStripHeader<std::string_view>();
+      if (d_prefix.length() > 0 && key.getNoStripHeader<StringView>().rfind(d_prefix, 0) != 0) {
+        return MDB_NOTFOUND;
+      }
 
       if (!LMDBLS::LSisDeleted(sval)) {
         // done!
@@ -594,6 +620,9 @@ private:
       // * so let's go back
     }
 #else /* ifndef DNSDIST */
+    (void)key;
+    (void)data;
+    (void)op;
     return rc;
 #endif
   }
@@ -601,6 +630,7 @@ private:
 public:
   int get(MDBOutVal& key, MDBOutVal& data, MDB_cursor_op op)
   {
+    d_prefix.clear();
     int rc = mdb_cursor_get(d_cursor, &key.d_mdbval, &data.d_mdbval, op);
     if(rc && rc != MDB_NOTFOUND)
        throw std::runtime_error("Unable to get from cursor: " + std::string(mdb_strerror(rc)));
@@ -609,6 +639,7 @@ public:
 
   int find(const MDBInVal& in, MDBOutVal& key, MDBOutVal& data)
   {
+    d_prefix.clear();
     key.d_mdbval = in.d_mdbval;
     int rc=mdb_cursor_get(d_cursor, const_cast<MDB_val*>(&key.d_mdbval), &data.d_mdbval, MDB_SET);
     if(rc && rc != MDB_NOTFOUND)
@@ -616,7 +647,19 @@ public:
     return skipDeleted(key, data, MDB_SET, rc);
   }
 
+  int prefix(const MDBInVal& in, MDBOutVal& key, MDBOutVal& data)
+  {
+    d_prefix = in.get<string>();
+    return _lower_bound(in, key, data);
+  }
+
   int lower_bound(const MDBInVal& in, MDBOutVal& key, MDBOutVal& data)
+  {
+    d_prefix.clear();
+    return _lower_bound(in, key, data);
+  }
+
+  int _lower_bound(const MDBInVal& in, MDBOutVal& key, MDBOutVal& data) // used by prefix() and lower_bound()
   {
     key.d_mdbval = in.d_mdbval;
 

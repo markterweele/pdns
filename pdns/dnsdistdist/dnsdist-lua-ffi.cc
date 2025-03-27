@@ -32,6 +32,7 @@
 #include "dnsdist-lua.hh"
 #include "dnsdist-ecs.hh"
 #include "dnsdist-rings.hh"
+#include "dnsdist-self-answers.hh"
 #include "dnsdist-svc.hh"
 #include "dnsdist-snmp.hh"
 #include "dolog.hh"
@@ -294,12 +295,16 @@ size_t dnsdist_ffi_dnsquestion_get_tag_raw(const dnsdist_ffi_dnsquestion_t* dq, 
 const char* dnsdist_ffi_dnsquestion_get_http_path(dnsdist_ffi_dnsquestion_t* dq)
 {
   if (!dq->httpPath) {
-    if (dq->dq->ids.du == nullptr) {
-      return nullptr;
-    }
-#ifdef HAVE_DNS_OVER_HTTPS
-    dq->httpPath = dq->dq->ids.du->getHTTPPath();
+    if (dq->dq->ids.du) {
+#if defined(HAVE_DNS_OVER_HTTPS)
+      dq->httpPath = dq->dq->ids.du->getHTTPPath();
 #endif /* HAVE_DNS_OVER_HTTPS */
+    }
+    else if (dq->dq->ids.doh3u) {
+#if defined(HAVE_DNS_OVER_HTTP3)
+      dq->httpPath = dq->dq->ids.doh3u->getHTTPPath();
+#endif /* HAVE_DNS_OVER_HTTP3 */
+    }
   }
   if (dq->httpPath) {
     return dq->httpPath->c_str();
@@ -310,12 +315,16 @@ const char* dnsdist_ffi_dnsquestion_get_http_path(dnsdist_ffi_dnsquestion_t* dq)
 const char* dnsdist_ffi_dnsquestion_get_http_query_string(dnsdist_ffi_dnsquestion_t* dq)
 {
   if (!dq->httpQueryString) {
-    if (dq->dq->ids.du == nullptr) {
-      return nullptr;
-    }
+    if (dq->dq->ids.du) {
 #ifdef HAVE_DNS_OVER_HTTPS
-    dq->httpQueryString = dq->dq->ids.du->getHTTPQueryString();
+      dq->httpQueryString = dq->dq->ids.du->getHTTPQueryString();
 #endif /* HAVE_DNS_OVER_HTTPS */
+    }
+    else if (dq->dq->ids.doh3u) {
+#if defined(HAVE_DNS_OVER_HTTP3)
+      dq->httpQueryString = dq->dq->ids.doh3u->getHTTPQueryString();
+#endif /* HAVE_DNS_OVER_HTTP3 */
+    }
   }
   if (dq->httpQueryString) {
     return dq->httpQueryString->c_str();
@@ -326,12 +335,16 @@ const char* dnsdist_ffi_dnsquestion_get_http_query_string(dnsdist_ffi_dnsquestio
 const char* dnsdist_ffi_dnsquestion_get_http_host(dnsdist_ffi_dnsquestion_t* dq)
 {
   if (!dq->httpHost) {
-    if (dq->dq->ids.du == nullptr) {
-      return nullptr;
-    }
+    if (dq->dq->ids.du) {
 #ifdef HAVE_DNS_OVER_HTTPS
-    dq->httpHost = dq->dq->ids.du->getHTTPHost();
+      dq->httpHost = dq->dq->ids.du->getHTTPHost();
 #endif /* HAVE_DNS_OVER_HTTPS */
+    }
+    else if (dq->dq->ids.doh3u) {
+#if defined(HAVE_DNS_OVER_HTTP3)
+      dq->httpHost = dq->dq->ids.doh3u->getHTTPHost();
+#endif /* HAVE_DNS_OVER_HTTP3 */
+    }
   }
   if (dq->httpHost) {
     return dq->httpHost->c_str();
@@ -342,12 +355,16 @@ const char* dnsdist_ffi_dnsquestion_get_http_host(dnsdist_ffi_dnsquestion_t* dq)
 const char* dnsdist_ffi_dnsquestion_get_http_scheme(dnsdist_ffi_dnsquestion_t* dq)
 {
   if (!dq->httpScheme) {
-    if (dq->dq->ids.du == nullptr) {
-      return nullptr;
-    }
+    if (dq->dq->ids.du) {
 #ifdef HAVE_DNS_OVER_HTTPS
-    dq->httpScheme = dq->dq->ids.du->getHTTPScheme();
+      dq->httpScheme = dq->dq->ids.du->getHTTPScheme();
 #endif /* HAVE_DNS_OVER_HTTPS */
+    }
+    else if (dq->dq->ids.doh3u) {
+#if defined(HAVE_DNS_OVER_HTTP3)
+      dq->httpScheme = dq->dq->ids.doh3u->getHTTPScheme();
+#endif /* HAVE_DNS_OVER_HTTP3 */
+    }
   }
   if (dq->httpScheme) {
     return dq->httpScheme->c_str();
@@ -402,38 +419,51 @@ size_t dnsdist_ffi_dnsquestion_get_edns_options(dnsdist_ffi_dnsquestion_t* dq, c
   return totalCount;
 }
 
-size_t dnsdist_ffi_dnsquestion_get_http_headers(dnsdist_ffi_dnsquestion_t* dq, const dnsdist_ffi_http_header_t** out)
+size_t dnsdist_ffi_dnsquestion_get_http_headers([[maybe_unused]] dnsdist_ffi_dnsquestion_t* ref, [[maybe_unused]] const dnsdist_ffi_http_header_t** out)
 {
-  if (dq->dq->ids.du == nullptr) {
+#if defined(HAVE_DNS_OVER_HTTPS) || defined(HAVE_DNS_OVER_HTTP3)
+  const auto processHeaders = [&ref](const std::unordered_map<std::string, std::string>& headers) {
+    if (headers.empty()) {
+      return;
+    }
+    ref->httpHeaders = std::make_unique<std::unordered_map<std::string, std::string>>(headers);
+    if (!ref->httpHeadersVect) {
+      ref->httpHeadersVect = std::make_unique<std::vector<dnsdist_ffi_http_header_t>>();
+    }
+    ref->httpHeadersVect->clear();
+    ref->httpHeadersVect->resize(ref->httpHeaders->size());
+    size_t pos = 0;
+    for (const auto& header : *ref->httpHeaders) {
+      ref->httpHeadersVect->at(pos).name = header.first.c_str();
+      ref->httpHeadersVect->at(pos).value = header.second.c_str();
+      ++pos;
+    }
+  };
+
+#if defined(HAVE_DNS_OVER_HTTPS)
+  if (ref->dq->ids.du) {
+    const auto& headers = ref->dq->ids.du->getHTTPHeaders();
+    processHeaders(headers);
+  }
+#endif /* HAVE_DNS_OVER_HTTPS */
+#if defined(HAVE_DNS_OVER_HTTP3)
+  if (ref->dq->ids.doh3u) {
+    const auto& headers = ref->dq->ids.doh3u->getHTTPHeaders();
+    processHeaders(headers);
+  }
+#endif /* HAVE_DNS_OVER_HTTP3 */
+
+  if (!ref->httpHeadersVect) {
     return 0;
   }
 
-#ifdef HAVE_DNS_OVER_HTTPS
-  auto headers = dq->dq->ids.du->getHTTPHeaders();
-  if (headers.size() == 0) {
-    return 0;
+  if (!ref->httpHeadersVect->empty()) {
+    *out = ref->httpHeadersVect->data();
   }
-  dq->httpHeaders = std::make_unique<std::unordered_map<std::string, std::string>>(std::move(headers));
-  if (!dq->httpHeadersVect) {
-    dq->httpHeadersVect = std::make_unique<std::vector<dnsdist_ffi_http_header_t>>();
-  }
-  dq->httpHeadersVect->clear();
-  dq->httpHeadersVect->resize(dq->httpHeaders->size());
-  size_t pos = 0;
-  for (const auto& header : *dq->httpHeaders) {
-    dq->httpHeadersVect->at(pos).name = header.first.c_str();
-    dq->httpHeadersVect->at(pos).value = header.second.c_str();
-    ++pos;
-  }
-
-  if (!dq->httpHeadersVect->empty()) {
-    *out = dq->httpHeadersVect->data();
-  }
-
-  return dq->httpHeadersVect->size();
-#else
+  return ref->httpHeadersVect->size();
+#else /* HAVE_DNS_OVER_HTTPS || HAVE_DNS_OVER_HTTP3 */
   return 0;
-#endif
+#endif /* HAVE_DNS_OVER_HTTPS || HAVE_DNS_OVER_HTTP3 */
 }
 
 size_t dnsdist_ffi_dnsquestion_get_tag_array(dnsdist_ffi_dnsquestion_t* dq, const dnsdist_ffi_tag_t** out)
@@ -468,19 +498,29 @@ void dnsdist_ffi_dnsquestion_set_result(dnsdist_ffi_dnsquestion_t* dq, const cha
   dq->result = std::string(str, strSize);
 }
 
-void dnsdist_ffi_dnsquestion_set_http_response(dnsdist_ffi_dnsquestion_t* dq, uint16_t statusCode, const char* body, size_t bodyLen, const char* contentType)
+void dnsdist_ffi_dnsquestion_set_http_response([[maybe_unused]] dnsdist_ffi_dnsquestion_t* ref, [[maybe_unused]] uint16_t statusCode, [[maybe_unused]] const char* body, [[maybe_unused]] size_t bodyLen, [[maybe_unused]] const char* contentType)
 {
-  if (dq->dq->ids.du == nullptr) {
-    return;
+#if defined(HAVE_DNS_OVER_HTTPS)
+  if (ref->dq->ids.du) {
+    // NOLINTNEXTLINE(cppcoreguidelines-pro-bounds-pointer-arithmetic): C API
+    PacketBuffer bodyVect(body, body + bodyLen);
+    ref->dq->ids.du->setHTTPResponse(statusCode, std::move(bodyVect), contentType);
+    dnsdist::PacketMangling::editDNSHeaderFromPacket(ref->dq->getMutableData(), [](dnsheader& header) {
+      header.qr = true;
+      return true;
+    });
   }
-
-#ifdef HAVE_DNS_OVER_HTTPS
-  PacketBuffer bodyVect(body, body + bodyLen);
-  dq->dq->ids.du->setHTTPResponse(statusCode, std::move(bodyVect), contentType);
-  dnsdist::PacketMangling::editDNSHeaderFromPacket(dq->dq->getMutableData(), [](dnsheader& header) {
-    header.qr = true;
-    return true;
-  });
+#endif
+#if defined(HAVE_DNS_OVER_HTTP3)
+  if (ref->dq->ids.doh3u) {
+    // NOLINTNEXTLINE(cppcoreguidelines-pro-bounds-pointer-arithmetic): C API
+    PacketBuffer bodyVect(body, body + bodyLen);
+    ref->dq->ids.doh3u->setHTTPResponse(statusCode, std::move(bodyVect), contentType);
+    dnsdist::PacketMangling::editDNSHeaderFromPacket(ref->dq->getMutableData(), [](dnsheader& header) {
+      header.qr = true;
+      return true;
+    });
+  }
 #endif
 }
 
@@ -598,16 +638,15 @@ bool dnsdist_ffi_dnsquestion_set_trailing_data(dnsdist_ffi_dnsquestion_t* dq, co
 
 void dnsdist_ffi_dnsquestion_send_trap(dnsdist_ffi_dnsquestion_t* dq, const char* reason, size_t reasonLen)
 {
-  if (g_snmpAgent != nullptr && dnsdist::configuration::getCurrentRuntimeConfiguration().d_snmpTrapsEnabled) {
+  if (g_snmpAgent != nullptr && dnsdist::configuration::getImmutableConfiguration().d_snmpTrapsEnabled) {
     g_snmpAgent->sendDNSTrap(*dq->dq, std::string(reason, reasonLen));
   }
 }
 
 void dnsdist_ffi_dnsquestion_spoof_packet(dnsdist_ffi_dnsquestion_t* dq, const char* raw, size_t len)
 {
-  std::string result;
-  SpoofAction tempSpoofAction(raw, len);
-  tempSpoofAction(dq->dq, &result);
+  // NOLINTNEXTLINE(cppcoreguidelines-pro-bounds-pointer-arithmetic)
+  dnsdist::self_answers::generateAnswerFromRawPacket(*dq->dq, PacketBuffer(raw, raw + len));
 }
 
 void dnsdist_ffi_dnsquestion_spoof_raw(dnsdist_ffi_dnsquestion_t* dq, const dnsdist_ffi_raw_value_t* values, size_t valuesCount)
@@ -619,9 +658,8 @@ void dnsdist_ffi_dnsquestion_spoof_raw(dnsdist_ffi_dnsquestion_t* dq, const dnsd
     data.emplace_back(values[idx].value, values[idx].size);
   }
 
-  std::string result;
-  SpoofAction tempSpoofAction(data, std::nullopt);
-  tempSpoofAction(dq->dq, &result);
+  dnsdist::ResponseConfig config{};
+  dnsdist::self_answers::generateAnswerFromRDataEntries(*dq->dq, data, std::nullopt, config);
 }
 
 void dnsdist_ffi_dnsquestion_spoof_addrs(dnsdist_ffi_dnsquestion_t* dq, const dnsdist_ffi_raw_value_t* values, size_t valuesCount)
@@ -648,9 +686,8 @@ void dnsdist_ffi_dnsquestion_spoof_addrs(dnsdist_ffi_dnsquestion_t* dq, const dn
     }
   }
 
-  std::string result;
-  SpoofAction tempSpoofAction(data);
-  tempSpoofAction(dq->dq, &result);
+  dnsdist::ResponseConfig config{};
+  dnsdist::self_answers::generateAnswerFromIPAddresses(*dq->dq, data, config);
 }
 
 void dnsdist_ffi_dnsquestion_set_max_returned_ttl(dnsdist_ffi_dnsquestion_t* dq, uint32_t max)
@@ -692,12 +729,14 @@ static size_t dnsdist_ffi_servers_get_index_from_server(const ServerPolicy::Numb
 
 size_t dnsdist_ffi_servers_list_chashed(const dnsdist_ffi_servers_list_t* list, const dnsdist_ffi_dnsquestion_t* dq, size_t hash)
 {
+  (void)dq;
   auto server = chashedFromHash(list->servers, hash);
   return dnsdist_ffi_servers_get_index_from_server(list->servers, server);
 }
 
 size_t dnsdist_ffi_servers_list_whashed(const dnsdist_ffi_servers_list_t* list, const dnsdist_ffi_dnsquestion_t* dq, size_t hash)
 {
+  (void)dq;
   auto server = whashedFromHash(list->servers, hash);
   return dnsdist_ffi_servers_get_index_from_server(list->servers, server);
 }
@@ -750,9 +789,7 @@ void dnsdist_ffi_dnsresponse_set_max_ttl(dnsdist_ffi_dnsresponse_t* dr, uint32_t
 void dnsdist_ffi_dnsresponse_limit_ttl(dnsdist_ffi_dnsresponse_t* dr, uint32_t min, uint32_t max)
 {
   if (dr != nullptr && dr->dr != nullptr) {
-    std::string result;
-    LimitTTLResponseAction ac(min, max);
-    ac(dr->dr, &result);
+    dnsdist::PacketMangling::restrictDNSPacketTTLs(dr->dr->getMutableData(), min, max);
   }
 }
 
@@ -1846,6 +1883,7 @@ void dnsdist_ffi_metric_set(const char* metricName, size_t metricNameLen, double
 
 double dnsdist_ffi_metric_get(const char* metricName, size_t metricNameLen, bool isCounter)
 {
+  (void)isCounter;
   auto result = dnsdist::metrics::getCustomMetric(std::string_view(metricName, metricNameLen), {});
   if (std::get_if<dnsdist::metrics::Error>(&result) != nullptr) {
     return 0.;

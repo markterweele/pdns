@@ -23,6 +23,7 @@
 #include "config.h"
 
 #include <cstdint>
+#include <filesystem>
 #include <fstream>
 #include <getopt.h>
 #include <grp.h>
@@ -43,6 +44,7 @@
 #include "dnsdist-cache.hh"
 #include "dnsdist-carbon.hh"
 #include "dnsdist-configuration.hh"
+#include "dnsdist-configuration-yaml.hh"
 #include "dnsdist-console.hh"
 #include "dnsdist-crypto.hh"
 #include "dnsdist-discovery.hh"
@@ -57,7 +59,9 @@
 #include "dnsdist-proxy-protocol.hh"
 #include "dnsdist-random.hh"
 #include "dnsdist-rings.hh"
+#include "dnsdist-rules.hh"
 #include "dnsdist-secpoll.hh"
+#include "dnsdist-self-answers.hh"
 #include "dnsdist-snmp.hh"
 #include "dnsdist-tcp.hh"
 #include "dnsdist-tcp-downstream.hh"
@@ -481,7 +485,7 @@ bool applyRulesToResponse(const std::vector<dnsdist::rules::ResponseRuleAction>&
   return true;
 }
 
-bool processResponseAfterRules(PacketBuffer& response, DNSResponse& dnsResponse, bool muted)
+bool processResponseAfterRules(PacketBuffer& response, DNSResponse& dnsResponse, [[maybe_unused]] bool muted)
 {
   bool zeroScope = false;
   if (!fixUpResponse(response, dnsResponse.ids.qname, dnsResponse.ids.origFlags, dnsResponse.ids.ednsAdded, dnsResponse.ids.ecsAdded, dnsResponse.ids.useZeroScope ? &zeroScope : nullptr)) {
@@ -520,9 +524,7 @@ bool processResponseAfterRules(PacketBuffer& response, DNSResponse& dnsResponse,
   }
 
   if (dnsResponse.ids.ttlCap > 0) {
-    std::string result;
-    LimitTTLResponseAction lrac(0, dnsResponse.ids.ttlCap, {});
-    lrac(&dnsResponse, &result);
+    dnsdist::PacketMangling::restrictDNSPacketTTLs(dnsResponse.getMutableData(), 0, dnsResponse.ids.ttlCap);
   }
 
   if (dnsResponse.ids.d_extendedError) {
@@ -582,7 +584,7 @@ static size_t getMaximumIncomingPacketSize(const ClientState& clientState)
   return dnsdist::configuration::s_udpIncomingBufferSize + runtimeConfig.d_proxyProtocolMaximumSize;
 }
 
-bool sendUDPResponse(int origFD, const PacketBuffer& response, const int delayMsec, const ComboAddress& origDest, const ComboAddress& origRemote)
+bool sendUDPResponse(int origFD, const PacketBuffer& response, [[maybe_unused]] const int delayMsec, const ComboAddress& origDest, const ComboAddress& origRemote)
 {
 #ifndef DISABLE_DELAY_PIPE
   if (delayMsec > 0 && g_delay != nullptr) {
@@ -832,28 +834,28 @@ static void spoofResponseFromString(DNSQuestion& dnsQuestion, const string& spoo
   string result;
 
   if (raw) {
+    dnsdist::ResponseConfig config;
     std::vector<std::string> raws;
     stringtok(raws, spoofContent, ",");
-    SpoofAction tempSpoofAction(raws, std::nullopt);
-    tempSpoofAction(&dnsQuestion, &result);
+    dnsdist::self_answers::generateAnswerFromRDataEntries(dnsQuestion, raws, std::nullopt, config);
   }
   else {
     std::vector<std::string> addrs;
     stringtok(addrs, spoofContent, " ,");
 
     if (addrs.size() == 1) {
+      dnsdist::ResponseConfig config;
       try {
         ComboAddress spoofAddr(spoofContent);
-        SpoofAction tempSpoofAction({spoofAddr});
-        tempSpoofAction(&dnsQuestion, &result);
+        dnsdist::self_answers::generateAnswerFromIPAddresses(dnsQuestion, {spoofAddr}, config);
       }
       catch (const PDNSException& e) {
         DNSName cname(spoofContent);
-        SpoofAction tempSpoofAction(cname); // CNAME then
-        tempSpoofAction(&dnsQuestion, &result);
+        dnsdist::self_answers::generateAnswerFromCNAME(dnsQuestion, cname, config);
       }
     }
     else {
+      dnsdist::ResponseConfig config;
       std::vector<ComboAddress> cas;
       for (const auto& addr : addrs) {
         try {
@@ -862,18 +864,15 @@ static void spoofResponseFromString(DNSQuestion& dnsQuestion, const string& spoo
         catch (...) {
         }
       }
-      SpoofAction tempSpoofAction(cas);
-      tempSpoofAction(&dnsQuestion, &result);
+      dnsdist::self_answers::generateAnswerFromIPAddresses(dnsQuestion, cas, config);
     }
   }
 }
 
 static void spoofPacketFromString(DNSQuestion& dnsQuestion, const string& spoofContent)
 {
-  string result;
-
-  SpoofAction tempSpoofAction(spoofContent.c_str(), spoofContent.size());
-  tempSpoofAction(&dnsQuestion, &result);
+  // NOLINTNEXTLINE(cppcoreguidelines-pro-bounds-pointer-arithmetic)
+  dnsdist::self_answers::generateAnswerFromRawPacket(dnsQuestion, PacketBuffer(spoofContent.data(), spoofContent.data() + spoofContent.size()));
 }
 
 bool processRulesResult(const DNSAction::Action& action, DNSQuestion& dnsQuestion, std::string& ruleresult, bool& drop)
@@ -1267,7 +1266,7 @@ static bool isUDPQueryAcceptable(ClientState& clientState, const struct msghdr* 
   return true;
 }
 
-bool checkDNSCryptQuery(const ClientState& clientState, PacketBuffer& query, std::unique_ptr<DNSCryptQuery>& dnsCryptQuery, time_t now, bool tcp)
+bool checkDNSCryptQuery(const ClientState& clientState, [[maybe_unused]] PacketBuffer& query, [[maybe_unused]] std::unique_ptr<DNSCryptQuery>& dnsCryptQuery, [[maybe_unused]] time_t now, [[maybe_unused]] bool tcp)
 {
   if (clientState.dnscryptCtx) {
 #ifdef HAVE_DNSCRYPT
@@ -1311,7 +1310,7 @@ bool checkQueryHeaders(const struct dnsheader& dnsHeader, ClientState& clientSta
 }
 
 #if !defined(DISABLE_RECVMMSG) && defined(HAVE_RECVMMSG) && defined(HAVE_SENDMMSG) && defined(MSG_WAITFORONE)
-static void queueResponse(const ClientState& clientState, const PacketBuffer& response, const ComboAddress& dest, const ComboAddress& remote, struct mmsghdr& outMsg, struct iovec* iov, cmsgbuf_aligned* cbuf)
+static void queueResponse(const PacketBuffer& response, const ComboAddress& dest, const ComboAddress& remote, struct mmsghdr& outMsg, struct iovec* iov, cmsgbuf_aligned* cbuf)
 {
   outMsg.msg_len = 0;
   // NOLINTNEXTLINE(cppcoreguidelines-pro-type-const-cast,cppcoreguidelines-pro-type-reinterpret-cast): API
@@ -1333,12 +1332,13 @@ struct mmsghdr
 #endif
 
 /* self-generated responses or cache hits */
-static bool prepareOutgoingResponse(const ClientState& clientState, DNSQuestion& dnsQuestion, bool cacheHit)
+static bool prepareOutgoingResponse([[maybe_unused]] const ClientState& clientState, DNSQuestion& dnsQuestion, bool cacheHit)
 {
   std::shared_ptr<DownstreamState> backend{nullptr};
   DNSResponse dnsResponse(dnsQuestion.ids, dnsQuestion.getMutableData(), backend);
   dnsResponse.d_incomingTCPState = dnsQuestion.d_incomingTCPState;
   dnsResponse.ids.selfGenerated = true;
+  dnsResponse.ids.cacheHit = cacheHit;
 
   const auto& chains = dnsdist::configuration::getCurrentRuntimeConfiguration().d_ruleChains;
   const auto& cacheHitRespRules = dnsdist::rules::getResponseRuleChain(chains, dnsdist::rules::ResponseRuleChain::CacheHitResponseRules);
@@ -1348,9 +1348,7 @@ static bool prepareOutgoingResponse(const ClientState& clientState, DNSQuestion&
   }
 
   if (dnsResponse.ids.ttlCap > 0) {
-    std::string result;
-    LimitTTLResponseAction ltrac(0, dnsResponse.ids.ttlCap, {});
-    ltrac(&dnsResponse, &result);
+    dnsdist::PacketMangling::restrictDNSPacketTTLs(dnsResponse.getMutableData(), 0, dnsResponse.ids.ttlCap);
   }
 
   if (dnsResponse.ids.d_extendedError) {
@@ -1500,7 +1498,7 @@ ProcessQueryResult processQueryAfterRules(DNSQuestion& dnsQuestion, std::shared_
 
       ++dnsdist::metrics::g_stats.cacheMisses;
 
-      //coverity[auto_causes_copy]
+      // coverity[auto_causes_copy]
       const auto existingPool = dnsQuestion.ids.poolName;
       const auto& chains = dnsdist::configuration::getCurrentRuntimeConfiguration().d_ruleChains;
       const auto& cacheMissRuleActions = dnsdist::rules::getRuleChain(chains, dnsdist::rules::RuleChain::CacheMissRules);
@@ -1582,6 +1580,7 @@ public:
 
   void handleResponse(const struct timeval& now, TCPResponse&& response) override
   {
+    (void)now;
     if (!response.d_ds && !response.d_idstate.selfGenerated) {
       throw std::runtime_error("Passing a cross-protocol answer originated from UDP without a valid downstream");
     }
@@ -1836,7 +1835,7 @@ static void processUDPQuery(ClientState& clientState, const struct msghdr* msgh,
 #ifndef DISABLE_RECVMMSG
 #if defined(HAVE_RECVMMSG) && defined(HAVE_SENDMMSG) && defined(MSG_WAITFORONE)
       if (dnsQuestion.ids.delayMsec == 0 && responsesVect != nullptr) {
-        queueResponse(clientState, query, dest, remote, (*responsesVect)[*queuedResponses], respIOV, respCBuf);
+        queueResponse(query, dest, remote, (*responsesVect)[*queuedResponses], respIOV, respCBuf);
         (*queuedResponses)++;
         handleResponseSent(dnsQuestion.ids.qname, dnsQuestion.ids.qtype, 0., remote, ComboAddress(), query.size(), *dnsHeader, dnsdist::Protocol::DoUDP, dnsdist::Protocol::DoUDP, false);
         return;
@@ -2176,6 +2175,7 @@ static void udpClientThread(std::vector<ClientState*> states)
       }
       else {
         auto callback = [&remote, &msgh, &iov, &packet, &handleOnePacket, initialBufferSize](int socket, FDMultiplexer::funcparam_t& funcparam) {
+          (void)socket;
           const auto* param = boost::any_cast<const UDPStateParam*>(funcparam);
           try {
             remote.sin4.sin_family = param->cs->local.sin4.sin_family;
@@ -2234,6 +2234,9 @@ static void maintThread()
           (*maintenanceCallback)();
         }
         dnsdist::lua::hooks::runMaintenanceHooks(*lua);
+#if !defined(DISABLE_DYNBLOCKS)
+        dnsdist::DynamicBlocks::runRegisteredGroups(*lua);
+#endif /* DISABLE_DYNBLOCKS */
         secondsToWaitLog = 0;
       }
       catch (const std::exception& e) {
@@ -2323,11 +2326,9 @@ static void healthChecksThread()
   setThreadName("dnsdist/healthC");
 
   constexpr int intervalUsec = 1000 * 1000;
-  struct timeval lastRound
-  {
+  struct timeval lastRound{
     .tv_sec = 0,
-    .tv_usec = 0
-  };
+    .tv_usec = 0};
 
   for (;;) {
     timeval now{};
@@ -2343,7 +2344,7 @@ static void healthChecksThread()
 
     std::unique_ptr<FDMultiplexer> mplexer{nullptr};
     // this points to the actual shared_ptrs!
-    //coverity[auto_causes_copy]
+    // coverity[auto_causes_copy]
     const auto servers = dnsdist::configuration::getCurrentRuntimeConfiguration().d_backends;
     for (const auto& dss : servers) {
       dss->updateStatisticsInfo();
@@ -2369,7 +2370,7 @@ static void healthChecksThread()
   }
 }
 
-static void bindAny(int addressFamily, int sock)
+static void bindAny([[maybe_unused]] int addressFamily, int sock)
 {
   __attribute__((unused)) int one = 1;
 
@@ -3271,6 +3272,55 @@ static ListeningSockets initListeningSockets()
   return result;
 }
 
+static std::optional<std::string> lookForTentativeConfigurationFileWithExtension(const std::string& configurationFile, const std::string& extension)
+{
+  auto dotPos = configurationFile.rfind('.');
+  if (dotPos == std::string::npos) {
+    return std::nullopt;
+  }
+  auto tentativeFile = configurationFile.substr(0, dotPos + 1) + extension;
+  if (!std::filesystem::exists(tentativeFile)) {
+    return std::nullopt;
+  }
+  return tentativeFile;
+}
+
+static bool loadConfigurationFromFile(const std::string& configurationFile, bool isClient, bool configCheck)
+{
+  if (boost::ends_with(configurationFile, ".yml")) {
+    // the bindings are always needed, for example for inline Lua
+    dnsdist::lua::setupLuaBindingsOnly(*(g_lua.lock()), isClient, configCheck);
+
+    if (auto tentativeLuaConfFile = lookForTentativeConfigurationFileWithExtension(configurationFile, "lua")) {
+      vinfolog("Loading configuration from auto-discovered Lua file %s", *tentativeLuaConfFile);
+      dnsdist::configuration::lua::loadLuaConfigurationFile(*(g_lua.lock()), *tentativeLuaConfFile, configCheck);
+    }
+    vinfolog("Loading configuration from YAML file %s", configurationFile);
+    if (!dnsdist::configuration::yaml::loadConfigurationFromFile(configurationFile, isClient, configCheck)) {
+      return false;
+    }
+    if (!isClient && !configCheck) {
+      dnsdist::lua::setupLuaConfigurationOptions(*(g_lua.lock()), false, false);
+    }
+    return true;
+  }
+
+  dnsdist::lua::setupLua(*(g_lua.lock()), isClient, configCheck);
+  if (boost::ends_with(configurationFile, ".lua")) {
+    vinfolog("Loading configuration from Lua file %s", configurationFile);
+    dnsdist::configuration::lua::loadLuaConfigurationFile(*(g_lua.lock()), configurationFile, configCheck);
+    if (auto tentativeYamlConfFile = lookForTentativeConfigurationFileWithExtension(configurationFile, "yml")) {
+      vinfolog("Loading configuration from auto-discovered YAML file %s", *tentativeYamlConfFile);
+      return dnsdist::configuration::yaml::loadConfigurationFromFile(*tentativeYamlConfFile, isClient, configCheck);
+    }
+  }
+  else {
+    vinfolog("Loading configuration from Lua file %s", configurationFile);
+    dnsdist::configuration::lua::loadLuaConfigurationFile(*(g_lua.lock()), configurationFile, configCheck);
+  }
+  return true;
+}
+
 int main(int argc, char** argv)
 {
   try {
@@ -3320,7 +3370,13 @@ int main(int argc, char** argv)
     });
 
     if (cmdLine.beClient || !cmdLine.command.empty()) {
-      setupLua(*(g_lua.lock()), true, false, cmdLine.config);
+      if (!loadConfigurationFromFile(cmdLine.config, true, false)) {
+#ifdef COVERAGE
+        exit(EXIT_FAILURE);
+#else
+        _exit(EXIT_FAILURE);
+#endif
+      }
       if (clientAddress != ComboAddress()) {
         dnsdist::configuration::updateRuntimeConfiguration([&clientAddress](dnsdist::configuration::RuntimeConfiguration& config) {
           config.d_consoleServerAddress = clientAddress;
@@ -3350,7 +3406,13 @@ int main(int argc, char** argv)
     dnsdist::webserver::registerBuiltInWebHandlers();
 
     if (cmdLine.checkConfig) {
-      setupLua(*(g_lua.lock()), false, true, cmdLine.config);
+      if (!loadConfigurationFromFile(cmdLine.config, false, true)) {
+#ifdef COVERAGE
+        exit(EXIT_FAILURE);
+#else
+        _exit(EXIT_FAILURE);
+#endif
+      }
       // No exception was thrown
       infolog("Configuration '%s' OK!", cmdLine.config);
 #ifdef COVERAGE
@@ -3368,7 +3430,13 @@ int main(int argc, char** argv)
     /* create the default pool no matter what */
     createPoolIfNotExists("");
 
-    setupLua(*(g_lua.lock()), false, false, cmdLine.config);
+    if (!loadConfigurationFromFile(cmdLine.config, false, false)) {
+#ifdef COVERAGE
+      exit(EXIT_FAILURE);
+#else
+      _exit(EXIT_FAILURE);
+#endif
+    }
 
     setupPools();
 
@@ -3381,12 +3449,6 @@ int main(int argc, char** argv)
       else {
         ++tcpBindsCount;
       }
-    }
-
-    if (dnsdist::configuration::getImmutableConfiguration().d_maxTCPClientThreads == 0 && tcpBindsCount > 0) {
-      dnsdist::configuration::updateImmutableConfiguration([](dnsdist::configuration::ImmutableConfiguration& config) {
-        config.d_maxTCPClientThreads = static_cast<size_t>(10);
-      });
     }
 
     dnsdist::configuration::setImmutableConfigurationDone();
@@ -3450,9 +3512,12 @@ int main(int argc, char** argv)
     g_delay = std::make_unique<DelayPipe<DelayedPacket>>();
 #endif /* DISABLE_DELAY_PIPE */
 
-    if (g_snmpAgent != nullptr) {
+#if defined(HAVE_NET_SNMP)
+    if (dnsdist::configuration::getImmutableConfiguration().d_snmpEnabled) {
+      g_snmpAgent = std::make_unique<DNSDistSNMPAgent>("dnsdist", dnsdist::configuration::getImmutableConfiguration().d_snmpDaemonSocketPath);
       g_snmpAgent->run();
     }
+#endif /* HAVE_NET_SNMP */
 
     /* we need to create the TCP worker threads before the
        acceptor ones, otherwise we might crash when processing
@@ -3507,7 +3572,7 @@ int main(int argc, char** argv)
     checkFileDescriptorsLimits(udpBindsCount, tcpBindsCount);
 
     {
-      //coverity[auto_causes_copy]
+      // coverity[auto_causes_copy]
       const auto states = dnsdist::configuration::getCurrentRuntimeConfiguration().d_backends; // it is a copy, but the internal shared_ptrs are the real deal
       auto mplexer = std::unique_ptr<FDMultiplexer>(FDMultiplexer::getMultiplexerSilent(states.size()));
       for (auto& dss : states) {

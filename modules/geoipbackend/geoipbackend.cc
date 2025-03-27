@@ -392,12 +392,20 @@ void GeoIPBackend::initialize()
     g_log << Logger::Warning << "No GeoIP database files loaded!" << endl;
   }
 
-  if (!getArg("zones-file").empty()) {
+  std::string zonesFile{getArg("zones-file")};
+  if (!zonesFile.empty()) {
     try {
-      config = YAML::LoadFile(getArg("zones-file"));
+      config = YAML::LoadFile(zonesFile);
     }
     catch (YAML::Exception& ex) {
-      throw PDNSException(string("Cannot read config file ") + ex.msg);
+      std::string description{};
+      if (!ex.mark.is_null()) {
+        description = "Configuration error in " + zonesFile + ", line " + std::to_string(ex.mark.line + 1) + ", column " + std::to_string(ex.mark.column + 1);
+      }
+      else {
+        description = "Cannot read config file " + zonesFile;
+      }
+      throw PDNSException(description + ": " + ex.msg);
     }
   }
 
@@ -647,7 +655,8 @@ static string queryGeoIP(const Netmask& addr, GeoIPInterface::GeoIPQueryAttribut
       break;
     case GeoIPInterface::Location:
       double lat = 0, lon = 0;
-      boost::optional<int> alt, prec;
+      std::optional<int> alt;
+      std::optional<int> prec;
       if (addr.isIPv6())
         found = gi->queryLocationV6(gl, ip, lat, lon, alt, prec);
       else
@@ -691,7 +700,7 @@ string getGeoForLua(const std::string& ip, int qaint)
 }
 
 static bool queryGeoLocation(const Netmask& addr, GeoIPNetmask& gl, double& lat, double& lon,
-                             boost::optional<int>& alt, boost::optional<int>& prec)
+                             std::optional<int>& alt, std::optional<int>& prec)
 {
   for (auto const& gi : s_geoip_files) {
     string val;
@@ -708,7 +717,8 @@ static bool queryGeoLocation(const Netmask& addr, GeoIPNetmask& gl, double& lat,
 string GeoIPBackend::format2str(string sformat, const Netmask& addr, GeoIPNetmask& gl, const GeoIPDomain& dom)
 {
   string::size_type cur, last;
-  boost::optional<int> alt, prec;
+  std::optional<int> alt;
+  std::optional<int> prec;
   double lat, lon;
   time_t t = time(nullptr);
   GeoIPNetmask tmp_gl; // largest wins

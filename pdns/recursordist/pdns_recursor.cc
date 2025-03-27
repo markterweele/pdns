@@ -59,6 +59,9 @@ thread_local std::unique_ptr<boost::circular_buffer<pair<DNSName, uint16_t>>> t_
 thread_local std::shared_ptr<NetmaskGroup> t_allowFrom;
 thread_local std::shared_ptr<NetmaskGroup> t_allowNotifyFrom;
 thread_local std::shared_ptr<notifyset_t> t_allowNotifyFor;
+thread_local std::shared_ptr<NetmaskGroup> t_proxyProtocolACL;
+thread_local std::shared_ptr<std::set<ComboAddress>> t_proxyProtocolExceptions;
+
 __thread struct timeval g_now; // timestamp, updated (too) frequently
 
 using listenSocketsAddresses_t = map<int, ComboAddress>; // is shared across all threads right now
@@ -780,22 +783,7 @@ int getFakeAAAARecords(const DNSName& qname, ComboAddress prefix, vector<DNSReco
               ret.end());
   }
   else {
-    // Remove double SOA records
-    std::set<DNSName> seenSOAs;
-    ret.erase(std::remove_if(
-                ret.begin(),
-                ret.end(),
-                [&seenSOAs](DNSRecord& record) {
-                  if (record.d_type == QType::SOA) {
-                    if (seenSOAs.count(record.d_name) > 0) {
-                      // We've had this SOA before, remove it
-                      return true;
-                    }
-                    seenSOAs.insert(record.d_name);
-                  }
-                  return false;
-                }),
-              ret.end());
+    pdns::dedupRecords(ret);
   }
   t_Counters.at(rec::Counter::dns64prefixanswers)++;
   return rcode;
@@ -829,7 +817,7 @@ int getFakePTRRecords(const DNSName& qname, vector<DNSRecord>& ret)
   record.setContent(std::make_shared<CNAMERecordContent>(newquery));
   // Copy the TTL of the synthesized CNAME from the actual answer
   record.d_ttl = (rcode == RCode::NoError && !answers.empty()) ? answers.at(0).d_ttl : SyncRes::s_minimumTTL;
-  ret.push_back(record);
+  ret.push_back(std::move(record));
 
   ret.insert(ret.end(), answers.begin(), answers.end());
 
@@ -1020,7 +1008,7 @@ void startDoResolve(void* arg) // NOLINT(readability-function-cognitive-complexi
 
       for (const auto& option : edo.d_options) {
         if (option.first == EDNSOptionCode::ECS && g_useIncomingECS && !comboWriter->d_ecsParsed) {
-          comboWriter->d_ecsFound = getEDNSSubnetOptsFromString(option.second, &comboWriter->d_ednssubnet);
+          comboWriter->d_ecsFound = EDNSSubnetOpts::getFromString(option.second, &comboWriter->d_ednssubnet);
         }
         else if (option.first == EDNSOptionCode::NSID) {
           const static string mode_server_id = ::arg()["server-id"];
@@ -1144,7 +1132,7 @@ void startDoResolve(void* arg) // NOLINT(readability-function-cognitive-complexi
       }
       // lookup failing cannot happen as dc->d_source != dc->d_mappedSource
     }
-    resolver.setQuerySource(useMapped ? comboWriter->d_mappedSource : comboWriter->d_source, g_useIncomingECS && !comboWriter->d_ednssubnet.source.empty() ? boost::optional<const EDNSSubnetOpts&>(comboWriter->d_ednssubnet) : boost::none);
+    resolver.setQuerySource(useMapped ? comboWriter->d_mappedSource : comboWriter->d_source, g_useIncomingECS && !comboWriter->d_ednssubnet.getSource().empty() ? boost::optional<const EDNSSubnetOpts&>(comboWriter->d_ednssubnet) : boost::none);
 
     resolver.setQueryReceivedOverTCP(comboWriter->d_tcp);
 
@@ -1178,7 +1166,7 @@ void startDoResolve(void* arg) // NOLINT(readability-function-cognitive-complexi
                                                   "qtype", Logging::Loggable(QType(comboWriter->d_mdp.d_qtype)),
                                                   "remote", Logging::Loggable(comboWriter->getRemote()),
                                                   "proto", Logging::Loggable(comboWriter->d_tcp ? "tcp" : "udp"),
-                                                  "ecs", Logging::Loggable(comboWriter->d_ednssubnet.source.empty() ? "" : comboWriter->d_ednssubnet.source.toString()),
+                                                  "ecs", Logging::Loggable(comboWriter->d_ednssubnet.getSource().empty() ? "" : comboWriter->d_ednssubnet.getSource().toString()),
                                                   "mtid", Logging::Loggable(g_multiTasker->getTid()));
     RunningResolveGuard tcpGuard(comboWriter);
 
@@ -1200,10 +1188,10 @@ void startDoResolve(void* arg) // NOLINT(readability-function-cognitive-complexi
 
     if (!g_quiet || tracedQuery) {
       if (!g_slogStructured) {
-        g_log << Logger::Warning << RecThreadInfo::id() << " [" << g_multiTasker->getTid() << "/" << g_multiTasker->numProcesses() << "] " << (comboWriter->d_tcp ? "TCP " : "") << "question for '" << comboWriter->d_mdp.d_qname << "|"
+        g_log << Logger::Warning << RecThreadInfo::thread_local_id() << " [" << g_multiTasker->getTid() << "/" << g_multiTasker->numProcesses() << "] " << (comboWriter->d_tcp ? "TCP " : "") << "question for '" << comboWriter->d_mdp.d_qname << "|"
               << QType(comboWriter->d_mdp.d_qtype) << "' from " << comboWriter->getRemote();
-        if (!comboWriter->d_ednssubnet.source.empty()) {
-          g_log << " (ecs " << comboWriter->d_ednssubnet.source.toString() << ")";
+        if (!comboWriter->d_ednssubnet.getSource().empty()) {
+          g_log << " (ecs " << comboWriter->d_ednssubnet.getSource().toString() << ")";
         }
         g_log << endl;
       }
@@ -1527,6 +1515,12 @@ void startDoResolve(void* arg) // NOLINT(readability-function-cognitive-complexi
       }
 
       if (!ret.empty()) {
+#ifdef notyet
+        // As dedupping is relatively expensive do not dedup in general. We do have a few cases
+        // where we call dedup explicitly, e.g. when doing NAT64 or when adding NSEC records in
+        // doCNAMECacheCheck
+        pdns::dedupRecords(ret);
+#endif
         pdns::orderAndShuffle(ret, false);
         if (auto listToSort = luaconfsLocal->sortlist.getOrderCmp(comboWriter->d_source)) {
           stable_sort(ret.begin(), ret.end(), *listToSort);
@@ -1572,9 +1566,7 @@ void startDoResolve(void* arg) // NOLINT(readability-function-cognitive-complexi
 #ifdef HAVE_FSTRM
       if (hasUDR) {
         if (isEnabledForUDRs(t_nodFrameStreamServersInfo.servers)) {
-          struct timespec timeSpec
-          {
-          };
+          struct timespec timeSpec{};
           std::string str;
           if (g_useKernelTimestamp && comboWriter->d_kernelTimestamp.tv_sec != 0) {
             TIMEVAL_TO_TIMESPEC(&comboWriter->d_kernelTimestamp, &timeSpec); // NOLINT
@@ -1598,12 +1590,12 @@ void startDoResolve(void* arg) // NOLINT(readability-function-cognitive-complexi
 
     if (g_useIncomingECS && comboWriter->d_ecsFound && !resolver.wasVariable() && !variableAnswer) {
       EDNSSubnetOpts ednsOptions;
-      ednsOptions.source = comboWriter->d_ednssubnet.source;
+      ednsOptions.setSource(comboWriter->d_ednssubnet.getSource());
       ComboAddress sourceAddr;
       sourceAddr.reset();
-      sourceAddr.sin4.sin_family = ednsOptions.source.getNetwork().sin4.sin_family;
-      ednsOptions.scope = Netmask(sourceAddr, 0);
-      auto ecsPayload = makeEDNSSubnetOptsString(ednsOptions);
+      sourceAddr.sin4.sin_family = ednsOptions.getFamily();
+      ednsOptions.setScopePrefixLength(0);
+      auto ecsPayload = ednsOptions.makeOptString();
 
       // if we don't have enough space available let's just not set that scope of zero,
       // it will prevent some caching, mostly from dnsdist, but that's fine
@@ -1731,9 +1723,7 @@ void startDoResolve(void* arg) // NOLINT(readability-function-cognitive-complexi
         nod = true;
 #ifdef HAVE_FSTRM
         if (isEnabledForNODs(t_nodFrameStreamServersInfo.servers)) {
-          struct timespec timeSpec
-          {
-          };
+          struct timespec timeSpec{};
           std::string str;
           if (g_useKernelTimestamp && comboWriter->d_kernelTimestamp.tv_sec != 0) {
             TIMEVAL_TO_TIMESPEC(&comboWriter->d_kernelTimestamp, &timeSpec); // NOLINT
@@ -1802,12 +1792,8 @@ void startDoResolve(void* arg) // NOLINT(readability-function-cognitive-complexi
     }
 
     if (!comboWriter->d_tcp) {
-      struct msghdr msgh
-      {
-      };
-      struct iovec iov
-      {
-      };
+      struct msghdr msgh{};
+      struct iovec iov{};
       cmsgbuf_aligned cbuf{};
       fillMSGHdr(&msgh, &iov, &cbuf, 0, reinterpret_cast<char*>(&*packet.begin()), packet.size(), &comboWriter->d_remote); // NOLINT(cppcoreguidelines-pro-type-reinterpret-cast)
       msgh.msg_control = nullptr;
@@ -1861,13 +1847,13 @@ void startDoResolve(void* arg) // NOLINT(readability-function-cognitive-complexi
       pbMessage.setId(comboWriter->d_mdp.d_header.id);
 
       pbMessage.setTime();
-      pbMessage.setEDNSSubnet(comboWriter->d_ednssubnet.source, comboWriter->d_ednssubnet.source.isIPv4() ? luaconfsLocal->protobufMaskV4 : luaconfsLocal->protobufMaskV6);
+      pbMessage.setEDNSSubnet(comboWriter->d_ednssubnet.getSource(), comboWriter->d_ednssubnet.getSource().isIPv4() ? luaconfsLocal->protobufMaskV4 : luaconfsLocal->protobufMaskV6);
       pbMessage.setRequestorId(dnsQuestion.requestorId);
       pbMessage.setDeviceId(dnsQuestion.deviceId);
       pbMessage.setDeviceName(dnsQuestion.deviceName);
       pbMessage.setToPort(comboWriter->d_destination.getPort());
       pbMessage.addPolicyTags(comboWriter->d_gettagPolicyTags);
-      pbMessage.setWorkerId(RecThreadInfo::id());
+      pbMessage.setWorkerId(RecThreadInfo::thread_local_id());
       pbMessage.setPacketCacheHit(false);
       pbMessage.setOutgoingQueries(resolver.d_outqueries);
       for (const auto& metaValue : dnsQuestion.meta) {
@@ -1902,7 +1888,7 @@ void startDoResolve(void* arg) // NOLINT(readability-function-cognitive-complexi
     uint64_t spentUsec = uSec(resolver.getNow() - comboWriter->d_now);
     if (!g_quiet) {
       if (!g_slogStructured) {
-        g_log << Logger::Error << RecThreadInfo::id() << " [" << g_multiTasker->getTid() << "/" << g_multiTasker->numProcesses() << "] answer to " << (comboWriter->d_mdp.d_header.rd ? "" : "non-rd ") << "question '" << comboWriter->d_mdp.d_qname << "|" << DNSRecordContent::NumberToType(comboWriter->d_mdp.d_qtype);
+        g_log << Logger::Error << RecThreadInfo::thread_local_id() << " [" << g_multiTasker->getTid() << "/" << g_multiTasker->numProcesses() << "] answer to " << (comboWriter->d_mdp.d_header.rd ? "" : "non-rd ") << "question '" << comboWriter->d_mdp.d_qname << "|" << DNSRecordContent::NumberToType(comboWriter->d_mdp.d_qtype);
         g_log << "': " << ntohs(packetWriter.getHeader()->ancount) << " answers, " << ntohs(packetWriter.getHeader()->arcount) << " additional, took " << resolver.d_outqueries << " packets, " << resolver.d_totUsec / 1000.0 << " netw ms, " << static_cast<double>(spentUsec) / 1000.0 << " tot ms, " << resolver.d_throttledqueries << " throttled, " << resolver.d_timeouts << " timeouts, " << resolver.d_tcpoutqueries << "/" << resolver.d_dotoutqueries << " tcp/dot connections, rcode=" << res;
 
         if (!shouldNotValidate && resolver.isDNSSECValidationRequested()) {
@@ -2054,7 +2040,7 @@ void getQNameAndSubnet(const std::string& question, DNSName* dnsname, uint16_t* 
         int res = getEDNSOption(reinterpret_cast<const char*>(&question.at(pos - sizeof(drh->d_clen))), questionLen - pos + sizeof(drh->d_clen), EDNSOptionCode::ECS, &ecsStartPosition, &ecsLen); // NOLINT(cppcoreguidelines-pro-type-reinterpret-cast)
         if (res == 0 && ecsLen > 4) {
           EDNSSubnetOpts eso;
-          if (getEDNSSubnetOptsFromString(&question.at(pos - sizeof(drh->d_clen) + ecsStartPosition + 4), ecsLen - 4, &eso)) {
+          if (EDNSSubnetOpts::getFromString(&question.at(pos - sizeof(drh->d_clen) + ecsStartPosition + 4), ecsLen - 4, &eso)) {
             *ednssubnet = eso;
             foundECS = true;
           }
@@ -2067,7 +2053,7 @@ void getQNameAndSubnet(const std::string& question, DNSName* dnsname, uint16_t* 
           const auto& iter = options->find(EDNSOptionCode::ECS);
           if (iter != options->end() && !iter->second.values.empty() && iter->second.values.at(0).content != nullptr && iter->second.values.at(0).size > 0) {
             EDNSSubnetOpts eso;
-            if (getEDNSSubnetOptsFromString(iter->second.values.at(0).content, iter->second.values.at(0).size, &eso)) {
+            if (EDNSSubnetOpts::getFromString(iter->second.values.at(0).content, iter->second.values.at(0).size, &eso)) {
               *ednssubnet = eso;
               foundECS = true;
             }
@@ -2167,7 +2153,16 @@ void requestWipeCaches(const DNSName& canon)
 
 bool expectProxyProtocol(const ComboAddress& from, const ComboAddress& listenAddress)
 {
-  return g_proxyProtocolACL.match(from) && g_proxyProtocolExceptions.count(listenAddress) == 0;
+  if (!t_proxyProtocolACL) {
+    return false;
+  }
+  if (t_proxyProtocolACL->match(from)) {
+    if (!t_proxyProtocolExceptions) {
+      return true;
+    }
+    return t_proxyProtocolExceptions->count(listenAddress) == 0;
+  }
+  return false;
 }
 
 // fromaddr: the address the query is coming from
@@ -2270,7 +2265,7 @@ static string* doProcessUDPQuestion(const std::string& question, const ComboAddr
         if (t_pdl) {
           try {
             if (t_pdl->hasGettagFFIFunc()) {
-              RecursorLua4::FFIParams params(qname, qtype, destaddr, fromaddr, destination, source, ednssubnet.source, data, policyTags, records, ednsOptions, proxyProtocolValues, requestorId, deviceId, deviceName, routingTag, rcode, ttlCap, variable, false, logQuery, logResponse, followCNAMEs, extendedErrorCode, extendedErrorExtra, responsePaddingDisabled, meta);
+              RecursorLua4::FFIParams params(qname, qtype, destaddr, fromaddr, destination, source, ednssubnet.getSource(), data, policyTags, records, ednsOptions, proxyProtocolValues, requestorId, deviceId, deviceName, routingTag, rcode, ttlCap, variable, false, logQuery, logResponse, followCNAMEs, extendedErrorCode, extendedErrorExtra, responsePaddingDisabled, meta);
 
               eventTrace.add(RecEventTrace::LuaGetTagFFI);
               ctag = t_pdl->gettag_ffi(params);
@@ -2278,7 +2273,7 @@ static string* doProcessUDPQuestion(const std::string& question, const ComboAddr
             }
             else if (t_pdl->hasGettagFunc()) {
               eventTrace.add(RecEventTrace::LuaGetTag);
-              ctag = t_pdl->gettag(source, ednssubnet.source, destination, qname, qtype, &policyTags, data, ednsOptions, false, requestorId, deviceId, deviceName, routingTag, proxyProtocolValues);
+              ctag = t_pdl->gettag(source, ednssubnet.getSource(), destination, qname, qtype, &policyTags, data, ednsOptions, false, requestorId, deviceId, deviceName, routingTag, proxyProtocolValues);
               eventTrace.add(RecEventTrace::LuaGetTag, ctag, false);
             }
           }
@@ -2300,7 +2295,7 @@ static string* doProcessUDPQuestion(const std::string& question, const ComboAddr
     RecursorPacketCache::OptPBData pbData{boost::none};
     if (t_protobufServers.servers) {
       if (logQuery && !(luaconfsLocal->protobufExportConfig.taggedOnly && policyTags.empty())) {
-        protobufLogQuery(luaconfsLocal, uniqueId, source, destination, mappedSource, ednssubnet.source, false, question.size(), qname, qtype, qclass, policyTags, requestorId, deviceId, deviceName, meta, ednsVersion, *dnsheader);
+        protobufLogQuery(luaconfsLocal, uniqueId, source, destination, mappedSource, ednssubnet.getSource(), false, question.size(), qname, qtype, qclass, policyTags, requestorId, deviceId, deviceName, meta, ednsVersion, *dnsheader);
       }
     }
 
@@ -2322,12 +2317,8 @@ static string* doProcessUDPQuestion(const std::string& question, const ComboAddr
                                  "qname", Logging::Loggable(qname), "qtype", Logging::Loggable(QType(qtype)),
                                  "source", Logging::Loggable(source), "remote", Logging::Loggable(fromaddr)));
         }
-        struct msghdr msgh
-        {
-        };
-        struct iovec iov
-        {
-        };
+        struct msghdr msgh{};
+        struct iovec iov{};
         cmsgbuf_aligned cbuf{};
         fillMSGHdr(&msgh, &iov, &cbuf, 0, reinterpret_cast<char*>(response.data()), response.length(), const_cast<ComboAddress*>(&fromaddr)); // NOLINT(cppcoreguidelines-pro-type-reinterpret-cast,cppcoreguidelines-pro-type-const-cast)
         msgh.msg_control = nullptr;
@@ -2338,7 +2329,7 @@ static string* doProcessUDPQuestion(const std::string& question, const ComboAddr
         int sendErr = sendOnNBSocket(fileDesc, &msgh);
         eventTrace.add(RecEventTrace::AnswerSent);
 
-        if (t_protobufServers.servers && logResponse && (!luaconfsLocal->protobufExportConfig.taggedOnly || !pbData || pbData->d_tagged)) {
+        if (t_protobufServers.servers && logResponse && (!luaconfsLocal->protobufExportConfig.taggedOnly || (pbData && pbData->d_tagged))) {
           protobufLogResponse(dnsheader, luaconfsLocal, pbData, tval, false, source, destination, mappedSource, ednssubnet, uniqueId, requestorId, deviceId, deviceName, meta, eventTrace, policyTags);
         }
 
@@ -2352,9 +2343,7 @@ static string* doProcessUDPQuestion(const std::string& question, const ComboAddr
                      << stringerror(sendErr) << endl,
                g_slogudpin->error(Logr::Error, sendErr, "Sending UDP reply to client failed", "source", Logging::Loggable(source), "remote", Logging::Loggable(fromaddr)));
         }
-        struct timeval now
-        {
-        };
+        struct timeval now{};
         Utility::gettimeofday(&now, nullptr);
         uint64_t spentUsec = uSec(now - tval);
         t_Counters.at(rec::Histogram::cumulativeAnswers)(spentUsec);
@@ -2460,17 +2449,14 @@ static string* doProcessUDPQuestion(const std::string& question, const ComboAddr
 
 static void handleNewUDPQuestion(int fileDesc, FDMultiplexer::funcparam_t& /* var */) // NOLINT(readability-function-cognitive-complexity): https://github.com/PowerDNS/pdns/issues/12791
 {
-  static const size_t maxIncomingQuerySize = g_proxyProtocolACL.empty() ? 512 : (512 + g_proxyProtocolMaximumSize);
+  const bool proxyActive = t_proxyProtocolACL && !t_proxyProtocolACL->empty();
+  static const size_t maxIncomingQuerySize = !proxyActive ? 512 : (512 + g_proxyProtocolMaximumSize);
   static thread_local std::string data;
   ComboAddress fromaddr; // the address the query is coming from
   ComboAddress source; // the address we assume the query is coming from, might be set by proxy protocol
   ComboAddress destination; // the address we assume the query was sent to, might be set by proxy protocol
-  struct msghdr msgh
-  {
-  };
-  struct iovec iov
-  {
-  };
+  struct msghdr msgh{};
+  struct iovec iov{};
   cmsgbuf_aligned cbuf;
   bool firstQuery = true;
   std::vector<ProxyProtocolValue> proxyProtocolValues;
@@ -2687,6 +2673,7 @@ unsigned int makeUDPServerSockets(deferredAdd_t& deferredAdds, Logr::log_t log, 
 {
   int one = 1;
   vector<string> localAddresses;
+  vector<string> logVec;
   stringtok(localAddresses, ::arg()["local-address"], " ,");
 
   if (localAddresses.empty()) {
@@ -2700,6 +2687,7 @@ unsigned int makeUDPServerSockets(deferredAdd_t& deferredAdds, Logr::log_t log, 
     if (socketFd < 0) {
       throw PDNSException("Making a UDP server socket for resolver: " + stringerror());
     }
+    logVec.emplace_back(address.toStringWithPort());
     if (!setSocketTimestamps(socketFd)) {
       SLOG(g_log << Logger::Warning << "Unable to enable timestamp reporting for socket" << endl,
            log->info(Logr::Warning, "Unable to enable timestamp reporting for socket"));
@@ -2774,7 +2762,7 @@ unsigned int makeUDPServerSockets(deferredAdd_t& deferredAdds, Logr::log_t log, 
     g_listenSocketsAddresses[socketFd] = address; // this is written to only from the startup thread, not from the workers
   }
   if (doLog) {
-    log->info(Logr::Info, "Listening for queries", "proto", Logging::Loggable("UDP"), "addresses", Logging::IterLoggable(localAddresses.cbegin(), localAddresses.cend()), "socketInstances", Logging::Loggable(instances), "reuseport", Logging::Loggable(g_reusePort));
+    log->info(Logr::Info, "Listening for queries", "proto", Logging::Loggable("UDP"), "addresses", Logging::IterLoggable(logVec.cbegin(), logVec.cend()), "socketInstances", Logging::Loggable(instances), "reuseport", Logging::Loggable(g_reusePort));
   }
   return localAddresses.size();
 }

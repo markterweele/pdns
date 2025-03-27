@@ -150,6 +150,10 @@ jobs:
       if: matrix.product == 'dnsdist'
       run: |
         inv install-dnsdist-build-deps --skipXDP
+    # installing the python3-package does not work because of actions/setup-python which installs a different version in /opt/hostedtoolcache/Python
+    - name: Install python yaml
+      run: |
+        pip install pyyaml
     - name: Autoreconf dnsdist
       if: matrix.product == 'dnsdist'
       working-directory: ./pdns/dnsdistdist/
@@ -165,12 +169,12 @@ jobs:
       if: matrix.product == 'dnsdist'
       working-directory: ./pdns/dnsdistdist/
       run: |
-        inv ci-dnsdist-configure full
+        inv ci-dnsdist-configure full autotools build-dir
     - name: Build dnsdist
       if: matrix.product == 'dnsdist'
       working-directory: ./pdns/dnsdistdist/
       run: |
-        inv ci-dnsdist-make-bear
+        inv ci-dnsdist-make-bear autotools
     - run: ln -s ../../.clang-tidy.full .clang-tidy
       if: matrix.product == 'dnsdist'
       working-directory: ./pdns/dnsdistdist/

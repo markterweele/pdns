@@ -1,7 +1,7 @@
 project(
   'pdns-recursor',
   ['c', 'cpp'],
-  version: run_command('../../builder-support' / 'gen-version', check: true).stdout().strip(),
+  version: run_command('version.sh', 'get-vcs', check: true).stdout().strip(),
   license: 'GPLv2',
   license_files: 'NOTICE',
   meson_version: '>= 1.2.1',
@@ -11,8 +11,17 @@ project(
     'cpp_std=c++17',
   ],
 )
-add_project_arguments('-DRECURSOR', language: 'cpp')
+meson.add_dist_script('meson-dist-script.sh')
 
+# When running meson dist, the command below produces multiple lines on stderr:
+# Unable to evaluate subdir([]) in AstInterpreter --> Skipping
+meson.add_dist_script('version.sh', 'set-dist', meson.project_version())
+
+add_project_arguments('-DRECURSOR', language: 'cpp')
+add_project_arguments(
+  '-fvisibility=hidden',
+  language: ['c', 'cpp'],
+)
 
 product_source_dir = meson.current_source_dir()
 product_build_dir = meson.current_build_dir()
@@ -47,6 +56,7 @@ subdir('meson' / 'mmap')                    # Check for mmap
 subdir('meson' / 'libsodium')               # Libsodium-based signers
 subdir('meson' / 'libcrypto')               # OpenSSL-based signers
 subdir('meson' / 'libssl')                  # OpenSSL libssl
+subdir('meson' / 'libssl-engines')          # OpenSSL libssl engines
 subdir('meson' / 'libsnmp')                 # SNMP
 subdir('meson' / 'dot')                     # DNS over TLS
 subdir('meson' / 'clock-gettime')           # Clock_gettime
@@ -67,8 +77,9 @@ subdir('meson' / 'various-headers')         # Various Headers
 subdir('meson' / 'libresolv')               # res_query
 subdir('meson' / 'dnstap')                  # DNSTAP through libfstream
 subdir('meson' / 'libcurl')                 # Curl
+subdir('meson' / 'libcap')                  # Capabilities
 
-subdir('settings')
+subdir('rec-rust-lib')
 
 common_sources = []
 
@@ -101,6 +112,7 @@ common_sources += files(
   src_dir / 'dnsrecords.cc',
   src_dir / 'dnssecinfra.cc',
   src_dir / 'dnswriter.cc',
+  src_dir / 'ednscookies.cc',
   src_dir / 'ednsextendederror.cc',
   src_dir / 'ednsoptions.cc',
   src_dir / 'ednspadding.cc',
@@ -293,10 +305,11 @@ dep_metrics = declare_dependency(
 deps = [
   dep_pdns,
   dep_no_config_in_source,
-  dep_rust_settings,
+  dep_rust_recrust,
   dep_boost,
   dep_boost_context,
   dep_threads,
+  dep_arc4random,
   dep_json11,
   dep_libcrypto,
   dep_libresolv,
@@ -305,11 +318,12 @@ deps = [
   dep_libssl,
   dep_lua,
   dep_protozero,
-  dep_yahttp,
+  dep_yahttp_header_only,
   dep_htmlfiles,
   dep_dnstap,
   dep_libcurl,
   dep_metrics,
+  dep_libcap,
 ]
 
 # Conditional sources that need to be separated into standalone libraries for special
@@ -390,15 +404,26 @@ librec_common = declare_dependency(
     config_h,
     dependencies: [
       deps,
-      dep_settings_ch,
+      dep_recrust_ch,
       librec_dnslabeltext,
     ],
   )
 )
 
+
+if target_machine.system() != 'darwin'
+    rec_link_args = [
+	'-Wl,--export-dynamic-symbol=pdns_ffi_*',
+	'-Wl,--export-dynamic-symbol=pdns_postresolve_ffi_*',
+    ]
+else
+    rec_link_args = ['-rdynamic']
+endif
+
 tools = {
   'pdns_recursor': {
     'main': src_dir / 'rec-main.cc',
+    'link-args': rec_link_args,
     'files-extra': [
       src_dir / 'capabilities.cc',
       src_dir / 'channel.cc',
@@ -415,30 +440,32 @@ tools = {
       dep_nod,
       dep_lua,
       dep_protozero,
-      dep_yahttp,
+      dep_yahttp_header_only,
       dep_json11,
-      dep_settings,
-      dep_rust_settings,
-      dep_systemd,
+      dep_recrust,
+      dep_rust_recrust,
+      dep_libsystemd,
       librec_signers_openssl,
       librec_signers_sodium,
       dep_pubsuffix,
     ],
+    'install': true,
+    'install_dir': get_option('sbindir'),
   },
   'rec_control': {
     'main': src_dir / 'rec_control.cc',
     'manpages': ['rec_control.1'],
     'deps-extra': [
       dep_boost,
-      dep_settings,
-      dep_rust_settings,
+      dep_recrust,
+      dep_rust_recrust,
     ],
+    'install': true,
   },
 }
 
 test_sources = []
 test_sources += files(
-      src_dir / 'ednscookies.cc',
       src_dir / 'test-aggressive_nsec_cc.cc',
       src_dir / 'test-arguments_cc.cc',
       src_dir / 'test-base32_cc.cc',
@@ -450,6 +477,7 @@ test_sources += files(
       src_dir / 'test-dnsparser_hh.cc',
       src_dir / 'test-dnsrecordcontent.cc',
       src_dir / 'test-dnsrecords_cc.cc',
+      src_dir / 'test-ednscookie_cc.cc',
       src_dir / 'test-ednsoptions_cc.cc',
       src_dir / 'test-filterpo_cc.cc',
       src_dir / 'test-histogram_hh.cc',
@@ -472,6 +500,7 @@ test_sources += files(
       src_dir / 'test-rpzloader_cc.cc',
       src_dir / 'test-secpoll_cc.cc',
       src_dir / 'test-settings.cc',
+      src_dir / 'test-shuffle_cc.cc',
       src_dir / 'test-signers.cc',
       src_dir / 'test-syncres_cc.cc',
       src_dir / 'test-syncres_cc.hh',
@@ -503,8 +532,8 @@ if get_option('unit-tests')
           dep_boost_test,
           dep_lua,
           dep_nod,
-          dep_settings,
-          dep_rust_settings,
+          dep_recrust,
+          dep_rust_recrust,
           librec_signers_openssl,
           librec_signers_sodium,
       ],
@@ -530,8 +559,11 @@ foreach tool, info: tools
   main = files(info['main'])
 
   export_dynamic = 'export-dynamic' in info ? info['export-dynamic'] : false
+  link_args = 'link-args' in info ? info['link-args'] : []
   files_extra = 'files-extra' in info ? info['files-extra'] : []
   deps_extra = 'deps-extra' in info ? info['deps-extra'] : []
+  install = 'install' in info ? info['install'] : false
+  install_dir = 'install_dir' in info ? info['install_dir'] : get_option('bindir')
 
   set_variable(
     var_name,
@@ -541,10 +573,13 @@ foreach tool, info: tools
       config_h,
       files_extra,
       export_dynamic: export_dynamic,
+      link_args: link_args,
       dependencies: [
         librec_common,
         deps_extra,
       ],
+      install: install,
+      install_dir: install_dir,
     )
   )
 
@@ -555,6 +590,10 @@ foreach tool, info: tools
   endif
 endforeach
 
+if get_option('unit-tests')
+  test('testrunner', testrunner)
+endif
+
 # Man-pages.
 py = import('python')
 python = py.find_installation('python3', modules: 'venv', required: false)
@@ -564,15 +603,203 @@ summary('Path', python.full_path(), section: 'Manual Pages')
 summary('Version', python.version(), section: 'Manual Pages')
 
 if python.found()
-  run_target(
-    'man-pages',
+  generated_man_pages = []
+  foreach tool, info: tools
+    if 'manpages' in info
+      foreach man_page: info['manpages']
+        if not fs.is_file(man_page)
+          generated_man_pages += man_page
+        endif
+      endforeach
+    endif
+  endforeach
+  if generated_man_pages.length() != 0
+    summary('Generating man pages', true, section: 'Manual Pages')
+    custom_target(
+      'man-pages',
+      input: man_pages,
+      output: generated_man_pages,
+      install: true,
+      install_dir: join_paths(get_option('mandir'), 'man1'),
+      command: [
+        python,
+        product_source_dir / docs_dir / 'generate-man-pages.py',
+        '--build-root', '@BUILD_ROOT@',
+        '--source-root', '@SOURCE_ROOT@',
+        '--venv-name', 'venv-rec-man-pages',
+        '--requirements-file', docs_dir / 'requirements.txt',
+        '--source-directory', docs_dir,
+        '--target-directory', '@BUILD_ROOT@',
+      ] + man_pages,
+    )
+  else
+    summary('Generating man pages', false, section: 'Manual Pages')
+  endif
+endif
+
+if dep_systemd_prog.found()
+  systemd_system_unit_dir = dep_systemd_prog.get_variable(
+    'systemdsystemunitdir',
+  )
+
+  systemd_service_conf = configuration_data()
+  systemd_service_conf.set('BinDir', get_option('prefix') / get_option('bindir'))
+  systemd_service_conf.set('StaticBinDir', get_option('prefix') / get_option('sbindir'))
+  systemd_service_user = get_option('systemd-service-user')
+  systemd_service_group = get_option('systemd-service-group')
+  systemd_service_conf.set('ServiceUser', systemd_service_user)
+  systemd_service_conf.set('ServiceGroup', systemd_service_group)
+  summary('Service User', systemd_service_user, section: 'Systemd')
+  summary('Service Group', systemd_service_group, section: 'Systemd')
+
+  # ProtectSystem=full will disallow write access to /etc and /usr, possibly not being
+  # able to write RPZ dumps or API related files.
+  systemd_service_conf.set(
+    'ProtectSystem', have_systemd_protect_system ? 'ProtectSystem=full' : '',
+  )
+  systemd_service_conf.set(
+    'SystemCallArchitectures',
+    have_systemd_system_call_architectures ? 'SystemCallArchitectures=native' : '',
+  )
+  systemd_system_call_filter = '~ @clock @debug @module @mount @raw-io @reboot @swap @cpu-emulation @obsolete'
+  systemd_service_conf.set(
+    'SystemCallFilter',
+    have_systemd_system_call_filter ? 'SystemCallFilter=' + systemd_system_call_filter : '',
+  )
+  systemd_service_conf.set(
+    'ProtectProc',
+    have_systemd_protect_proc ? 'ProtectProc=invisible' : '',
+  )
+
+  systemd_features = {
+    'LockPersonality': have_systemd_lock_personality,
+    'PrivateDevices': have_systemd_private_devices,
+    'PrivateTmp': have_systemd_private_tmp,
+    'PrivateUsers': false, # Setting it to true prevents us from opening our sockets.
+    'ProtectClock': have_systemd_protect_clock,
+    'ProtectControlGroups': have_systemd_protect_control_groups,
+    'ProtectHome': have_systemd_protect_home,
+    'ProtectHostname': have_systemd_protect_hostname,
+    'ProtectKernelLogs': have_systemd_protect_kernel_logs,
+    'ProtectKernelModules': have_systemd_protect_kernel_modules,
+    'ProtectKernelTunables': have_systemd_protect_kernel_tunables,
+    'RestrictNamespaces': have_systemd_restrict_namespaces,
+    'RestrictRealtime': have_systemd_restrict_realtime,
+    'RestrictSUIDSGID': have_systemd_restrict_suidsgid,
+    'PrivateIPC': have_systemd_private_ipc,
+    'RemoveIPC': have_systemd_remove_ipc,
+  }
+
+  foreach feature, enable_it: systemd_features
+    systemd_service_conf.set(feature, enable_it ? feature + '=true': '')
+  endforeach
+
+  rec_service_conf = configuration_data()
+  rec_service_conf.merge_from(systemd_service_conf)
+  # Disabled, it breaks LuaJIT.
+  rec_service_conf.set(
+    'MemoryDenyWriteExecute',
+    have_systemd_memory_deny_write_execute ? 'MemoryDenyWriteExecute=false' : '',
+  )
+  rec_service_conf.set(
+    'RestrictAddressFamilies',
+    have_systemd_restrict_address_families ? 'RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6' : '',
+  )
+
+  enable_socket_dir = (not have_systemd_with_runtime_dir_env) and have_systemd_percent_t
+
+  rec_service_conf_general = configuration_data()
+  rec_service_conf_general.merge_from(rec_service_conf)
+  rec_service_conf_general.set('Description', 'PowerDNS Recursor')
+  rec_service_conf_general.set('ConfigName', '')
+  rec_service_conf_general.set('SocketDir', enable_socket_dir ? '--socket-dir=%t/pdns-recursor' : '')
+  rec_service_conf_general.set('RecControlSocketDir', '--socket-dir=%t/pdns-recursor')
+  rec_service_conf_general.set('SyslogIdentifier', 'pdns-recursor')
+  rec_service_conf_general.set('RuntimeDirectory', 'pdns-recursor')
+
+  configure_file(
+    input: 'pdns-recursor.service.meson.in',
+    output: 'pdns-recursor.service',
+    configuration: rec_service_conf_general,
+    install: true,
+    install_dir: systemd_system_unit_dir,
+  )
+
+  rec_service_conf_instance = configuration_data()
+  rec_service_conf_instance.merge_from(rec_service_conf)
+  rec_service_conf_instance.set('Description', 'PowerDNS Recursor %i')
+  rec_service_conf_instance.set('ConfigName', '--config-name=%i')
+  rec_service_conf_instance.set('SocketDir', enable_socket_dir ? '--socket-dir=%t/pdns-recursor-%i' : '')
+  rec_service_conf_instance.set('RecControlSocketDir', '--socket-dir=%t/pdns-recursor-%i')
+  rec_service_conf_instance.set('SyslogIdentifier', 'pdns-recursor-%i')
+  rec_service_conf_instance.set('RuntimeDirectory', have_systemd_percent_t ? 'pdns-recursor-%i' : 'pdns-recursor')
+
+  configure_file(
+    input: 'pdns-recursor.service.meson.in',
+    output: 'pdns-recursor@.service',
+    configuration: rec_service_conf_instance,
+    install: true,
+    install_dir: systemd_system_unit_dir,
+  )
+endif
+
+
+dep_conf_distfile = custom_target(
+  'gen-conf-distfile',
+  command: [pdns_recursor, '--config=default'],
+  output: 'recursor.yml-dist',
+  capture: true,
+  install: true,
+  install_dir:  get_option('sysconfdir'),
+)
+
+if python.found()
+
+  html_docs = custom_target(
+    'html-docs',
     command: [
-      python,
-      product_source_dir / docs_dir / 'generate-man-pages.py',
-      '--venv-name', 'venv-rec-man-pages',
-      '--requirements-file', docs_dir / 'requirements.txt',
-      '--source-directory', docs_dir,
-      '--target-directory', 'rec-man-pages',
-    ] + man_pages,
+        python,
+        product_source_dir / docs_dir / 'generate-docs.py',
+        '--build-root', '@BUILD_ROOT@',
+        '--source-root', '@SOURCE_ROOT@',
+        '--venv-name', 'venv-docs',
+        '--requirements-file', docs_dir / 'requirements.txt',
+        '--source-directory', docs_dir,
+        '--target-directory', '@BUILD_ROOT@' / 'html-docs',
+    ],
+    output: 'sphinx.stamp',
+    console: true,
+    depfile: 'sphinx.d',
+    depends: [ metricfiles, recrust ], # for generated .rst files
+  )
+
+  docs_tarball = custom_target(
+    'html-docs.tar.bz2',
+    command: ['tar', 'cjf', 'html-docs.tar.bz2', html_docs],
+    output: 'html-docs.tar.bz2',
+  )
+
+  pdf_docs = custom_target(
+    command: [
+        python,
+        product_source_dir / docs_dir / 'generate-docs.py',
+        '--build-root', '@BUILD_ROOT@',
+        '--source-root', '@SOURCE_ROOT@',
+        '--venv-name', 'venv-docs',
+        '--requirements-file', docs_dir / 'requirements.txt',
+        '--source-directory', docs_dir,
+        '--target-directory', '@BUILD_ROOT@',
+        '--pdf-name', 'PowerDNS-Recursor.pdf',
+    ],
+    output: 'PowerDNS-Recursor.pdf',
+    console: true,
+    depfile: 'sphinx.d',
+    depends: [ metricfiles, recrust ], # for generated .rst files
+  )
+
+  run_target(
+    'all-docs',
+    # args mentioned in command line become auto-dependency
+    command: ['echo', 'Generated', html_docs, docs_tarball, pdf_docs],
   )
 endif

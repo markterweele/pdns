@@ -99,18 +99,18 @@ void ZoneData::parseDRForCache(DNSRecord& dnsRecord)
   case QType::NSEC3:
     break;
   case QType::RRSIG: {
-    const auto rrsig = getRR<RRSIGRecordContent>(dnsRecord);
+    auto rrsig = getRR<RRSIGRecordContent>(dnsRecord);
     if (rrsig == nullptr) {
       break;
     }
     const auto sigkey = pair(key.first, rrsig->d_type);
     auto found = d_sigs.find(sigkey);
     if (found != d_sigs.end()) {
-      found->second.push_back(rrsig);
+      found->second.push_back(std::move(rrsig));
     }
     else {
       vector<shared_ptr<const RRSIGRecordContent>> sigsrr;
-      sigsrr.push_back(rrsig);
+      sigsrr.push_back(std::move(rrsig));
       d_sigs.insert({sigkey, sigsrr});
     }
     break;
@@ -420,8 +420,8 @@ void ZoneData::ZoneToCache(const RecZoneToCache::Config& config)
       bool auth = isRRSetAuth(qname, qtype);
       // Same decision as updateCacheFromRecords() (we do not test for NSEC since we skip those completely)
       if (auth || (qtype == QType::NS || qtype == QType::A || qtype == QType::AAAA || qtype == QType::DS)) {
-        g_recCache->replace(d_now, qname, qtype, v, sigsrr,
-                            std::vector<std::shared_ptr<DNSRecord>>(), auth, d_zone);
+        g_recCache->replace(d_now, qname, qtype, v, sigsrr, {},
+                            auth, d_zone);
       }
       break;
     }

@@ -134,7 +134,7 @@ struct TSIGKey
 struct AutoPrimary
 {
   AutoPrimary(string new_ip, string new_nameserver, string new_account) :
-    ip(std::move(new_ip)), nameserver(std::move(new_nameserver)), account(std::move(new_account)){};
+    ip(std::move(new_ip)), nameserver(std::move(new_nameserver)), account(std::move(new_account)) {};
   std::string ip;
   std::string nameserver;
   std::string account;
@@ -353,7 +353,7 @@ public:
   }
 
   //! get list of all members in a catalog
-  virtual bool getCatalogMembers(const DNSName& /* catalog */, vector<CatalogInfo>& /* members */, CatalogInfo::CatalogType /* type */)
+  [[nodiscard]] virtual bool getCatalogMembers(const DNSName& /* catalog */, vector<CatalogInfo>& /* members */, CatalogInfo::CatalogType /* type */)
   {
     return false;
   }
@@ -465,6 +465,12 @@ public:
     return false;
   }
 
+  //! Returns whether backend operations have caused files to be created.
+  virtual bool hasCreatedLocalFiles() const
+  {
+    return false;
+  }
+
   const string& getPrefix() { return d_prefix; };
 
 protected:
@@ -479,8 +485,8 @@ private:
 class BackendFactory
 {
 public:
-  BackendFactory(const string& name) :
-    d_name(name) {}
+  BackendFactory(string name) :
+    d_name(std::move(name)) {}
   virtual ~BackendFactory() = default;
   virtual DNSBackend* make(const string& suffix) = 0;
   virtual DNSBackend* makeMetadataOnly(const string& suffix)
@@ -528,7 +534,7 @@ public:
 struct SOAData
 {
   SOAData() :
-    domain_id(-1){};
+    domain_id(-1) {};
 
   DNSName qname;
   DNSName nameserver;

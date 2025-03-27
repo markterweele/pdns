@@ -1,10 +1,7 @@
+import os
+import time
 from invoke import task
 from invoke.exceptions import Failure, UnexpectedExit
-
-import json
-import os
-import sys
-import time
 
 auth_backend_ip_addr = os.getenv('AUTH_BACKEND_IP_ADDR', '127.0.0.1')
 
@@ -60,7 +57,24 @@ rec_build_deps = [
 ]
 rec_bulk_deps = [
     'curl',
+    'bind9-dnsutils',
     'libboost-all-dev',
+    'libcap2',
+    'libfstrm0',
+    'libluajit-5.1-2',
+    '"libsnmp[1-9]+"',
+    'libsodium23',
+    'libsystemd0',
+    'moreutils',
+    'pdns-tools',
+    'unzip',
+]
+rec_bulk_ubicloud_deps = [
+    'curl',
+    'bind9-dnsutils',
+    'libboost-context1.74.0',
+    'libboost-system1.74.0',
+    'libboost-filesystem1.74.0',
     'libcap2',
     'libfstrm0',
     'libluajit-5.1-2',
@@ -93,7 +107,7 @@ auth_test_deps = [   # FIXME: we should be generating some of these from shlibde
     'bind9utils',
     'curl',
     'default-jre-headless',
-    'dnsutils',
+    'bind9-dnsutils',
     'faketime',
     'gawk',
     'krb5-user',
@@ -155,11 +169,19 @@ def apt_fresh(c):
     c.sudo('apt-get -y --allow-downgrades dist-upgrade')
 
 @task
+def install_lld_linker_if_needed(c):
+    if is_compiler_clang():
+        c.sudo(f'apt-get -y --no-install-recommends install lld-{clang_version}')
+
+@task
 def install_clang(c):
     """
     install clang and llvm
     """
-    c.sudo(f'apt-get -y --no-install-recommends install clang-{clang_version} llvm-{clang_version}')
+    if int(clang_version) >= 14:
+        c.sudo(f'apt-get -y --no-install-recommends install clang-{clang_version} llvm-{clang_version} llvm-{clang_version}-dev libclang-rt-{clang_version}-dev')
+    else:
+        c.sudo(f'apt-get -y --no-install-recommends install clang-{clang_version} llvm-{clang_version} llvm-{clang_version}-dev')
 
 @task
 def install_clang_tidy_tools(c):
@@ -168,7 +190,10 @@ def install_clang_tidy_tools(c):
 @task
 def install_clang_runtime(c):
     # this gives us the symbolizer, for symbols in asan/ubsan traces
-    c.sudo(f'apt-get -y --no-install-recommends install clang-{clang_version}')
+    # on Debian we need llvm-symbolizer-XX
+    #c.sudo(f'apt-get -y --no-install-recommends install llvm-symbolizer-{clang_version}')
+    # on Ubuntu we need llvm-XX instead
+    c.sudo(f'apt-get -y --no-install-recommends install llvm-{clang_version}')
 
 @task
 def ci_install_rust(c, repo):
@@ -183,14 +208,9 @@ def install_doc_deps(c):
 def install_doc_deps_pdf(c):
     c.sudo('apt-get install -y ' + ' '.join(doc_deps_pdf))
 
-def install_meson(c):
-    c.run(f'python3 -m venv {repo_home}/.venv')
-    c.run(f'. {repo_home}/.venv/bin/activate && pip install -r {repo_home}/meson/requirements.txt')
-
 @task
 def install_auth_build_deps(c):
     c.sudo('apt-get install -y --no-install-recommends ' + ' '.join(all_build_deps + git_build_deps + auth_build_deps))
-    install_meson(c)
 
 def is_coverage_enabled():
     sanitizers = os.getenv('SANITIZERS')
@@ -265,6 +285,11 @@ def install_auth_test_deps(c, backend): # FIXME: rename this, we do way more tha
 @task
 def install_rec_bulk_deps(c): # FIXME: rename this, we do way more than apt-get
     c.sudo('apt-get --no-install-recommends -y install ' + ' '.join(rec_bulk_deps))
+    c.run('chmod +x /opt/pdns-recursor/bin/* /opt/pdns-recursor/sbin/*')
+
+@task
+def install_rec_bulk_ubicloud_deps(c): # FIXME: rename this, we do way more than apt-get
+    c.sudo('apt-get --no-install-recommends -y install ' + ' '.join(rec_bulk_ubicloud_deps))
     c.run('chmod +x /opt/pdns-recursor/bin/* /opt/pdns-recursor/sbin/*')
 
 @task
@@ -368,7 +393,22 @@ def ci_docs_add_ssh(c, ssh_key, host_key):
 def get_sanitizers(meson=False):
     sanitizers = os.getenv('SANITIZERS', '')
     if meson:
-        return f'-D b_sanitize={sanitizers}' if sanitizers != '' else ''
+        subst = {
+            'tsan': 'thread',
+            'asan': 'address',
+            'ubsan': 'undefined'
+        }
+        meson_sanitizers = ''
+        sanitizers = sanitizers.split('+')
+        for sanitizer in sanitizers:
+            if sanitizer in subst:
+                if meson_sanitizers != '':
+                    meson_sanitizers = meson_sanitizers + ','
+                meson_sanitizers = meson_sanitizers + subst[sanitizer]
+            else:
+                meson_sanitizers = meson_sanitizers + sanitizer
+
+        return f'-D b_sanitize={meson_sanitizers}' if meson_sanitizers != '' else ''
     if sanitizers != '':
         sanitizers = sanitizers.split('+')
         sanitizers = ['--enable-' + sanitizer for sanitizer in sanitizers]
@@ -425,12 +465,14 @@ def get_cxxflags():
     ])
 
 
-def get_base_configure_cmd(additional_c_flags='', additional_cxx_flags='', enable_systemd=True, enable_sodium=True):
+def get_base_configure_cmd(additional_c_flags='', additional_cxx_flags='', additional_ld_flags='', enable_systemd=True, enable_sodium=True):
     cflags = " ".join([get_cflags(), additional_c_flags])
     cxxflags = " ".join([get_cxxflags(), additional_cxx_flags])
+    ldflags = additional_ld_flags
     return " ".join([
         f'CFLAGS="{cflags}"',
         f'CXXFLAGS="{cxxflags}"',
+        f'LDFLAGS="{ldflags}"',
         './configure',
         f"CC='{get_c_compiler()}'",
         f"CXX='{get_cxx_compiler()}'",
@@ -446,13 +488,15 @@ def get_base_configure_cmd(additional_c_flags='', additional_cxx_flags='', enabl
 def get_base_configure_cmd_meson(build_dir, additional_c_flags='', additional_cxx_flags='', enable_systemd=True, enable_sodium=True):
     cflags = " ".join([get_cflags(), additional_c_flags])
     cxxflags = " ".join([get_cxxflags(), additional_cxx_flags])
-    return " ".join([
+    env = " ".join([
         f'CFLAGS="{cflags}"',
         f'CXXFLAGS="{cxxflags}"',
         f"CC='{get_c_compiler()}'",
-        f"CXX='{get_cxx_compiler()}'",
-        f'. {repo_home}/.venv/bin/activate && meson setup {build_dir}',
-        "-D systemd={}".format("enabled" if enable_systemd else "disabled"),
+        f"CXX='{get_cxx_compiler()}'"
+    ])
+    return " ".join([
+        f'{env} meson setup {build_dir}',
+        "-D systemd-service={}".format("enabled" if enable_systemd else "disabled"),
         "-D signers-libsodium={}".format("enabled" if enable_sodium else "disabled"),
         "-D hardening-fortify-source=auto",
         "-D auto-var-init=pattern",
@@ -518,7 +562,7 @@ def ci_auth_configure_meson(c, build_dir):
         "-D module-remote-zeromq=true",
         "-D module-tinydns=static",
         "-D tools=true",
-        "-D dns-over-tls=true",
+        "-D dns-over-tls=enabled",
         "-D experimental-pkcs11=enabled",
         "-D experimental-gss-tsig=enabled",
         "-D prefix=/opt/pdns-auth",
@@ -542,10 +586,43 @@ def ci_auth_configure(c, build_dir=None, meson=False):
             with c.cd(f'{build_dir}'):
                 ci_auth_configure_autotools(c)
 
-@task
-def ci_rec_configure(c, features):
-    unittests = get_unit_tests()
+def ci_rec_configure_meson(c, features, build_dir):
+    unittests = get_unit_tests(meson=True, auth=False)
+    if features == "full":
+        configure_cmd = " ".join([
+            "LDFLAGS='-L/usr/local/lib -Wl,-rpath,/usr/local/lib'",
+            get_base_configure_cmd_meson(build_dir),
+            "-D prefix=/opt/pdns-recursor",
+            "-D dns-over-tls=enabled",
+            "-D nod=true",
+            "-D libcap=enabled",
+            "-D lua=luajit",
+            "-D snmp=enabled",
+            unittests,
+        ])
+    else:
+        configure_cmd = " ".join([
+            "LDFLAGS='-L/usr/local/lib -Wl,-rpath,/usr/local/lib'",
+            get_base_configure_cmd_meson(build_dir),
+            "-D prefix=/opt/pdns-recursor",
+            "-D dns-over-tls=disabled",
+            "-D dnstap=disabled",
+            "-D nod=false",
+            "-D systemd-service=disabled",
+            "-D lua=luajit",
+            "-D libcap=disabled",
+            "-D libcurl=disabled",
+            "-D signers-libsodium=disabled",
+            "-D snmp=disabled",
+            unittests,
+        ])
+    res = c.run(configure_cmd, warn=True)
+    if res.exited != 0:
+        c.run(f'cat {build_dir}/meson-logs/meson-log.txt')
+        raise UnexpectedExit(res)
 
+def ci_rec_configure_autotools(c, features):
+    unittests = get_unit_tests()
     if features == 'full':
         configure_cmd = " ".join([
             get_base_configure_cmd(),
@@ -581,10 +658,70 @@ def ci_rec_configure(c, features):
         c.run('cat config.log')
         raise UnexpectedExit(res)
 
+@task
+def ci_rec_configure(c, features, build_dir=None, meson=False):
+    if meson:
+        ci_rec_configure_meson(c, features, build_dir)
+    else:
+        ci_rec_configure_autotools(c, features)
+        if build_dir:
+            ci_make_distdir(c)
+            with c.cd(f'{build_dir}'):
+                ci_rec_configure_autotools(c, features)
 
 @task
-def ci_dnsdist_configure(c, features):
+def ci_dnsdist_configure(c, features, builder, build_dir):
     additional_flags = ''
+    additional_ld_flags = ''
+    if is_compiler_clang():
+        additional_ld_flags += '-fuse-ld=lld '
+
+    if features == 'least':
+        additional_flags = '-DDISABLE_COMPLETION \
+                            -DDISABLE_DELAY_PIPE \
+                            -DDISABLE_DYNBLOCKS \
+                            -DDISABLE_PROMETHEUS \
+                            -DDISABLE_PROTOBUF \
+                            -DDISABLE_BUILTIN_HTML \
+                            -DDISABLE_CARBON \
+                            -DDISABLE_SECPOLL \
+                            -DDISABLE_DEPRECATED_DYNBLOCK \
+                            -DDISABLE_LUA_WEB_HANDLERS \
+                            -DDISABLE_NON_FFI_DQ_BINDINGS \
+                            -DDISABLE_POLICIES_BINDINGS \
+                            -DDISABLE_PACKETCACHE_BINDINGS \
+                            -DDISABLE_DOWNSTREAM_BINDINGS \
+                            -DDISABLE_COMBO_ADDR_BINDINGS \
+                            -DDISABLE_CLIENT_STATE_BINDINGS \
+                            -DDISABLE_QPS_LIMITER_BINDINGS \
+                            -DDISABLE_SUFFIX_MATCH_BINDINGS \
+                            -DDISABLE_NETMASK_BINDINGS \
+                            -DDISABLE_DNSNAME_BINDINGS \
+                            -DDISABLE_DNSHEADER_BINDINGS \
+                            -DDISABLE_RECVMMSG \
+                            -DDISABLE_WEB_CACHE_MANAGEMENT \
+                            -DDISABLE_WEB_CONFIG \
+                            -DDISABLE_RULES_ALTERING_QUERIES \
+                            -DDISABLE_ECS_ACTIONS \
+                            -DDISABLE_TOP_N_BINDINGS \
+                            -DDISABLE_OCSP_STAPLING \
+                            -DDISABLE_HASHED_CREDENTIALS \
+                            -DDISABLE_FALSE_SHARING_PADDING \
+                            -DDISABLE_NPN'
+
+    if builder == 'meson':
+        cmd = ci_dnsdist_configure_meson(features, additional_flags, additional_ld_flags, build_dir)
+        logfile = 'meson-logs/meson-log.txt'
+    else:
+        cmd = ci_dnsdist_configure_autotools(features, additional_flags, additional_ld_flags)
+        logfile = 'config.log'
+
+    res = c.run(cmd, warn=True)
+    if res.exited != 0:
+        c.run(f'cat {logfile}')
+        raise UnexpectedExit(res)
+
+def ci_dnsdist_configure_autotools(features, additional_flags, additional_ld_flags):
     if features == 'full':
       features_set = '--enable-dnstap \
                       --enable-dnscrypt \
@@ -593,6 +730,7 @@ def ci_dnsdist_configure(c, features):
                       --enable-dns-over-quic \
                       --enable-dns-over-http3 \
                       --enable-systemd \
+                      --enable-yaml \
                       --prefix=/opt/dnsdist \
                       --with-gnutls \
                       --with-h2o \
@@ -617,43 +755,12 @@ def ci_dnsdist_configure(c, features):
                       --without-net-snmp \
                       --without-nghttp2 \
                       --without-re2'
-      additional_flags = '-DDISABLE_COMPLETION \
-                          -DDISABLE_DELAY_PIPE \
-                          -DDISABLE_DYNBLOCKS \
-                          -DDISABLE_PROMETHEUS \
-                          -DDISABLE_PROTOBUF \
-                          -DDISABLE_BUILTIN_HTML \
-                          -DDISABLE_CARBON \
-                          -DDISABLE_SECPOLL \
-                          -DDISABLE_DEPRECATED_DYNBLOCK \
-                          -DDISABLE_LUA_WEB_HANDLERS \
-                          -DDISABLE_NON_FFI_DQ_BINDINGS \
-                          -DDISABLE_POLICIES_BINDINGS \
-                          -DDISABLE_PACKETCACHE_BINDINGS \
-                          -DDISABLE_DOWNSTREAM_BINDINGS \
-                          -DDISABLE_COMBO_ADDR_BINDINGS \
-                          -DDISABLE_CLIENT_STATE_BINDINGS \
-                          -DDISABLE_QPS_LIMITER_BINDINGS \
-                          -DDISABLE_SUFFIX_MATCH_BINDINGS \
-                          -DDISABLE_NETMASK_BINDINGS \
-                          -DDISABLE_DNSNAME_BINDINGS \
-                          -DDISABLE_DNSHEADER_BINDINGS \
-                          -DDISABLE_RECVMMSG \
-                          -DDISABLE_WEB_CACHE_MANAGEMENT \
-                          -DDISABLE_WEB_CONFIG \
-                          -DDISABLE_RULES_ALTERING_QUERIES \
-                          -DDISABLE_ECS_ACTIONS \
-                          -DDISABLE_TOP_N_BINDINGS \
-                          -DDISABLE_OCSP_STAPLING \
-                          -DDISABLE_HASHED_CREDENTIALS \
-                          -DDISABLE_FALSE_SHARING_PADDING \
-                          -DDISABLE_NPN'
     unittests = get_unit_tests()
     fuzztargets = get_fuzzing_targets()
     tools = f'''AR=llvm-ar-{clang_version} RANLIB=llvm-ranlib-{clang_version}''' if is_compiler_clang() else ''
-    configure_cmd = " ".join([
+    return " ".join([
         tools,
-        get_base_configure_cmd(additional_c_flags='', additional_cxx_flags=additional_flags, enable_systemd=False, enable_sodium=False),
+        get_base_configure_cmd(additional_c_flags='', additional_cxx_flags=additional_flags, additional_ld_flags=additional_ld_flags, enable_systemd=False, enable_sodium=False),
         features_set,
         unittests,
         fuzztargets,
@@ -661,10 +768,70 @@ def ci_dnsdist_configure(c, features):
         '--prefix=/opt/dnsdist'
     ])
 
-    res = c.run(configure_cmd, warn=True)
-    if res.exited != 0:
-        c.run('cat config.log')
-        raise UnexpectedExit(res)
+def ci_dnsdist_configure_meson(features, additional_flags, additional_ld_flags, build_dir):
+    if features == 'full':
+      features_set = '-D cdb=enabled \
+                      -D dnscrypt=enabled \
+                      -D dnstap=enabled \
+                      -D ebpf=enabled \
+                      -D h2o=enabled \
+                      -D ipcipher=enabled \
+                      -D libedit=enabled \
+                      -D libsodium=enabled \
+                      -D lmdb=enabled \
+                      -D nghttp2=enabled \
+                      -D re2=enabled \
+                      -D systemd-service=enabled \
+                      -D tls-gnutls=enabled \
+                      -D dns-over-https=enabled \
+                      -D dns-over-http3=enabled \
+                      -D dns-over-quic=enabled \
+                      -D dns-over-tls=enabled \
+                      -D reproducible=true \
+                      -D snmp=enabled'
+    else:
+      features_set = '-D cdb=disabled \
+                      -D dnscrypt=disabled \
+                      -D dnstap=disabled \
+                      -D ebpf=disabled \
+                      -D h2o=disabled \
+                      -D ipcipher=disabled \
+                      -D libedit=disabled \
+                      -D libsodium=disabled \
+                      -D lmdb=disabled \
+                      -D nghttp2=disabled \
+                      -D re2=disabled \
+                      -D systemd-service=disabled \
+                      -D tls-gnutls=disabled \
+                      -D dns-over-https=disabled \
+                      -D dns-over-http3=disabled \
+                      -D dns-over-quic=disabled \
+                      -D dns-over-tls=disabled \
+                      -D reproducible=false \
+                      -D snmp=disabled'
+    unittests = get_unit_tests(meson=True)
+    fuzztargets = get_fuzzing_targets(meson=True)
+    tools = f'''AR=llvm-ar-{clang_version} RANLIB=llvm-ranlib-{clang_version}''' if is_compiler_clang() else ''
+    cflags = " ".join([get_cflags()])
+    cxxflags = " ".join([get_cxxflags(), additional_flags])
+    env = " ".join([
+        tools,
+        f'CFLAGS="{cflags}"',
+        f'LDFLAGS="{additional_ld_flags}"',
+        f'CXXFLAGS="{cxxflags}"',
+        f"CC='{get_c_compiler()}'",
+        f"CXX='{get_cxx_compiler()}'",
+    ])
+    return " ".join([
+        f'. {repo_home}/.venv/bin/activate && {env} meson setup {build_dir}',
+        features_set,
+        unittests,
+        fuzztargets,
+        "-D hardening-fortify-source=auto",
+        "-D auto-var-init=pattern",
+        get_coverage(meson=True),
+        get_sanitizers(meson=True)
+    ])
 
 @task
 def ci_auth_make(c):
@@ -675,7 +842,7 @@ def ci_auth_make_bear(c):
     c.run(f'bear --append -- make -j{get_build_concurrency()} -k V=1')
 
 def run_ninja(c):
-    c.run(f'. {repo_home}/.venv/bin/activate && ninja -j{get_build_concurrency()} --verbose')
+    c.run(f'ninja -j{get_build_concurrency()} --verbose')
 
 @task
 def ci_auth_build(c, meson=False):
@@ -685,20 +852,29 @@ def ci_auth_build(c, meson=False):
         ci_auth_make_bear(c)
 
 @task
-def ci_rec_make(c):
-    c.run(f'make -j{get_build_concurrency()} -k V=1')
-
-@task
 def ci_rec_make_bear(c):
     # Assumed to be running under ./pdns/recursordist/
     c.run(f'bear --append -- make -j{get_build_concurrency()} -k V=1')
 
 @task
+def ci_rec_build(c, meson=False):
+    if meson:
+        run_ninja(c)
+    else:
+        ci_rec_make_bear(c)
+
+@task
 def ci_dnsdist_make(c):
     c.run(f'make -j{get_build_concurrency(4)} -k V=1')
 
+def ci_dnsdist_run_ninja(c):
+    c.run(f'. {repo_home}/.venv/bin/activate && ninja -j{get_build_concurrency()} --verbose')
+
 @task
-def ci_dnsdist_make_bear(c):
+def ci_dnsdist_make_bear(c, builder):
+    if builder == 'meson':
+        return ci_dnsdist_run_ninja(c)
+
     # Assumed to be running under ./pdns/dnsdistdist/
     c.run(f'bear --append -- make -j{get_build_concurrency(4)} -k V=1')
 
@@ -712,7 +888,7 @@ def ci_auth_run_unit_tests(c, meson=False):
         suite_timeout_sec = 120
         logfile = 'meson-logs/testlog.txt'
         c.run(f'touch {repo_home}/regression-tests/tests/verify-dnssec-zone/allow-missing {repo_home}/regression-tests.nobackend/rectify-axfr/allow-missing') # FIXME: can this go?
-        res = c.run(f'. {repo_home}/.venv/bin/activate && meson test --verbose -t {suite_timeout_sec}', warn=True)
+        res = c.run(f'meson test --verbose -t {suite_timeout_sec}', warn=True)
     else:
         logfile = 'pdns/test-suite.log'
         res = c.run('make check', warn=True)
@@ -722,22 +898,34 @@ def ci_auth_run_unit_tests(c, meson=False):
         raise UnexpectedExit(res)
 
 @task
-def ci_rec_run_unit_tests(c):
-    res = c.run('make check', warn=True)
+def ci_rec_run_unit_tests(c, meson=False):
+    if meson:
+        suite_timeout_sec = 120
+        logfile = 'meson-logs/testlog.txt'
+        res = c.run(f'meson test --verbose -t {suite_timeout_sec}', warn=True)
+    else:
+        res = c.run('make check', warn=True)
+        if res.exited != 0:
+          c.run('cat test-suite.log')
+          raise UnexpectedExit(res)
+
+@task
+def ci_dnsdist_run_unit_tests(c, builder):
+    if builder == 'meson':
+        suite_timeout_sec = 120
+        logfile = 'meson-logs/testlog.txt'
+        res = c.run(f'. {repo_home}/.venv/bin/activate && meson test --verbose -t {suite_timeout_sec}', warn=True)
+    else:
+        logfile = 'test-suite.log'
+        res = c.run('make check', warn=True)
     if res.exited != 0:
-      c.run('cat test-suite.log')
+      c.run(f'cat {logfile}', warn=True)
       raise UnexpectedExit(res)
 
 @task
-def ci_dnsdist_run_unit_tests(c):
-    res = c.run('make check', warn=True)
-    if res.exited != 0:
-      c.run('cat test-suite.log')
-      raise UnexpectedExit(res)
-
-@task
-def ci_make_distdir(c):
-    c.run('make distdir')
+def ci_make_distdir(c, meson=False):
+    if not meson:
+        c.run('make distdir')
 
 @task
 def ci_auth_install(c, meson=False):
@@ -747,6 +935,11 @@ def ci_auth_install(c, meson=False):
 @task
 def ci_make_install(c):
     c.run('make install')
+
+@task
+def ci_rec_install(c, meson=False):
+    if not meson:
+        c.run('make install')
 
 @task
 def add_auth_repo(c, dist_name, dist_release_name, pdns_repo_version):
@@ -966,13 +1159,14 @@ def test_ixfrdist(c):
     with c.cd('regression-tests.ixfrdist'):
         c.run('IXFRDISTBIN=/opt/pdns-auth/bin/ixfrdist ./runtests')
 
-@task
-def test_dnsdist(c):
+@task(optional=['skipXDP'])
+def test_dnsdist(c, skipXDP=False):
+    test_env_vars = 'ENABLE_SUDO_TESTS=1' if not skipXDP else ''
     c.run('chmod +x /opt/dnsdist/bin/*')
     c.run('ls -ald /var /var/agentx /var/agentx/master')
     c.run('ls -al /var/agentx/master')
     with c.cd('regression-tests.dnsdist'):
-        c.run('DNSDISTBIN=/opt/dnsdist/bin/dnsdist LD_LIBRARY_PATH=/opt/dnsdist/lib/ ENABLE_SUDO_TESTS=1 ./runtests')
+        c.run(f'DNSDISTBIN=/opt/dnsdist/bin/dnsdist LD_LIBRARY_PATH=/opt/dnsdist/lib/ {test_env_vars} ./runtests')
 
 @task
 def test_regression_recursor(c):
@@ -980,13 +1174,12 @@ def test_regression_recursor(c):
     c.run('PDNSRECURSOR=/opt/pdns-recursor/sbin/pdns_recursor RECCONTROL=/opt/pdns-recursor/bin/rec_control ./build-scripts/test-recursor')
 
 @task
-def test_bulk_recursor(c, threads, mthreads, shards):
-    # We run an extremely small version of the bulk test, as GH does not seem to be able to handle the UDP load
+def test_bulk_recursor(c, size, threads, mthreads, shards, ipv6):
     with c.cd('regression-tests'):
-        c.run('curl -LO http://s3-us-west-1.amazonaws.com/umbrella-static/top-1m.csv.zip')
+        c.run('curl --no-progress-meter -LO https://umbrella-static.s3.dualstack.us-west-1.amazonaws.com/top-1m.csv.zip')
         c.run('unzip top-1m.csv.zip -d .')
         c.run('chmod +x /opt/pdns-recursor/bin/* /opt/pdns-recursor/sbin/*')
-        c.run(f'DNSBULKTEST=/usr/bin/dnsbulktest RECURSOR=/opt/pdns-recursor/sbin/pdns_recursor RECCONTROL=/opt/pdns-recursor/bin/rec_control THRESHOLD=95 TRACE=no ./recursor-test 5300 100 {threads} {mthreads} {shards}')
+        c.run(f'DNSBULKTEST=/usr/bin/dnsbulktest RECURSOR=/opt/pdns-recursor/sbin/pdns_recursor RECCONTROL=/opt/pdns-recursor/bin/rec_control IPv6={ipv6} THRESHOLD=95 TRACE=no ./recursor-test 5300 {size} {threads} {mthreads} {shards}')
 
 @task
 def install_swagger_tools(c):
@@ -1032,10 +1225,16 @@ def ci_build_and_install_quiche(c, repo):
         c.run(f'sudo {repo}/builder-support/helpers/install_quiche.sh')
 
     # cannot use c.sudo() inside a cd() context, see https://github.com/pyinvoke/invoke/issues/687
-    c.run('sudo mv /usr/lib/libdnsdist-quiche.so /usr/lib/libquiche.so')
-    c.run("sudo sed -i 's,^Libs:.*,Libs: -lquiche,g' /usr/lib/pkgconfig/quiche.pc")
-    c.run('mkdir -p /opt/dnsdist/lib')
-    c.run('cp /usr/lib/libquiche.so /opt/dnsdist/lib/libquiche.so')
+    for tentative in ['lib/x86_64-linux-gnu', 'lib/aarch64-linux-gnu', 'lib64', 'lib']:
+        tentative_libdir = f'/usr/{tentative}'
+        quiche_lib = f'{tentative_libdir}/libdnsdist-quiche.so'
+        if not os.path.isfile(quiche_lib):
+            continue
+        c.run(f'sudo mv {quiche_lib} /usr/lib/libquiche.so')
+        c.run(f"sudo sed -i 's,^Libs:.*,Libs: -lquiche,g' {tentative_libdir}/pkgconfig/quiche.pc")
+        c.run('mkdir -p /opt/dnsdist/lib')
+        c.run('cp /usr/lib/libquiche.so /opt/dnsdist/lib/libquiche.so')
+        break
 
 # this is run always
 def setup():

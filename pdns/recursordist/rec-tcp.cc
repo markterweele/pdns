@@ -68,7 +68,8 @@ bool g_anyToTcp;
 
 uint16_t TCPConnection::s_maxInFlight;
 
-thread_local std::unique_ptr<tcpClientCounts_t> t_tcpClientCounts;
+using tcpClientCounts_t = map<ComboAddress, uint32_t, ComboAddress::addressOnlyLessThan>;
+static thread_local std::unique_ptr<tcpClientCounts_t> t_tcpClientCounts = std::make_unique<tcpClientCounts_t>();
 
 static void handleRunningTCPQuestion(int fileDesc, FDMultiplexer::funcparam_t& var);
 
@@ -107,7 +108,7 @@ TCPConnection::~TCPConnection()
          g_slogtcpin->error(Logr::Error, e.reason, "Error closing TCPConnection socket", "exception", Logging::Loggable("PDNSException")));
   }
 
-  if (t_tcpClientCounts->count(d_remote) != 0 && (*t_tcpClientCounts)[d_remote]-- == 0) {
+  if (t_tcpClientCounts && t_tcpClientCounts->count(d_remote) != 0 && (*t_tcpClientCounts)[d_remote]-- == 0) {
     t_tcpClientCounts->erase(d_remote);
   }
   --s_currentConnections;
@@ -277,7 +278,7 @@ static void doProtobufLogQuery(bool logQuery, LocalStateHolder<LuaConfigItems>& 
 {
   try {
     if (logQuery && !(luaconfsLocal->protobufExportConfig.taggedOnly && comboWriter->d_policyTags.empty())) {
-      protobufLogQuery(luaconfsLocal, comboWriter->d_uuid, comboWriter->d_source, comboWriter->d_destination, comboWriter->d_mappedSource, comboWriter->d_ednssubnet.source, true, conn->qlen, qname, qtype, qclass, comboWriter->d_policyTags, comboWriter->d_requestorId, comboWriter->d_deviceId, comboWriter->d_deviceName, comboWriter->d_meta, ednsVersion, *dnsheader);
+      protobufLogQuery(luaconfsLocal, comboWriter->d_uuid, comboWriter->d_source, comboWriter->d_destination, comboWriter->d_mappedSource, comboWriter->d_ednssubnet.getSource(), true, conn->qlen, qname, qtype, qclass, comboWriter->d_policyTags, comboWriter->d_requestorId, comboWriter->d_deviceId, comboWriter->d_deviceName, comboWriter->d_meta, ednsVersion, *dnsheader);
     }
   }
   catch (const std::exception& e) {
@@ -291,9 +292,7 @@ static void doProtobufLogQuery(bool logQuery, LocalStateHolder<LuaConfigItems>& 
 static void doProcessTCPQuestion(std::unique_ptr<DNSComboWriter>& comboWriter, shared_ptr<TCPConnection>& conn, RunningTCPQuestionGuard& tcpGuard, int fileDesc)
 {
   RecThreadInfo::self().incNumberOfDistributedQueries();
-  struct timeval start
-  {
-  };
+  struct timeval start{};
   Utility::gettimeofday(&start, nullptr);
 
   DNSName qname;
@@ -329,14 +328,14 @@ static void doProcessTCPQuestion(std::unique_ptr<DNSComboWriter>& comboWriter, s
       if (t_pdl) {
         try {
           if (t_pdl->hasGettagFFIFunc()) {
-            RecursorLua4::FFIParams params(qname, qtype, comboWriter->d_local, comboWriter->d_remote, comboWriter->d_destination, comboWriter->d_source, comboWriter->d_ednssubnet.source, comboWriter->d_data, comboWriter->d_gettagPolicyTags, comboWriter->d_records, ednsOptions, comboWriter->d_proxyProtocolValues, requestorId, deviceId, deviceName, comboWriter->d_routingTag, comboWriter->d_rcode, comboWriter->d_ttlCap, comboWriter->d_variable, true, logQuery, comboWriter->d_logResponse, comboWriter->d_followCNAMERecords, comboWriter->d_extendedErrorCode, comboWriter->d_extendedErrorExtra, comboWriter->d_responsePaddingDisabled, comboWriter->d_meta);
+            RecursorLua4::FFIParams params(qname, qtype, comboWriter->d_local, comboWriter->d_remote, comboWriter->d_destination, comboWriter->d_source, comboWriter->d_ednssubnet.getSource(), comboWriter->d_data, comboWriter->d_gettagPolicyTags, comboWriter->d_records, ednsOptions, comboWriter->d_proxyProtocolValues, requestorId, deviceId, deviceName, comboWriter->d_routingTag, comboWriter->d_rcode, comboWriter->d_ttlCap, comboWriter->d_variable, true, logQuery, comboWriter->d_logResponse, comboWriter->d_followCNAMERecords, comboWriter->d_extendedErrorCode, comboWriter->d_extendedErrorExtra, comboWriter->d_responsePaddingDisabled, comboWriter->d_meta);
             comboWriter->d_eventTrace.add(RecEventTrace::LuaGetTagFFI);
             comboWriter->d_tag = t_pdl->gettag_ffi(params);
             comboWriter->d_eventTrace.add(RecEventTrace::LuaGetTagFFI, comboWriter->d_tag, false);
           }
           else if (t_pdl->hasGettagFunc()) {
             comboWriter->d_eventTrace.add(RecEventTrace::LuaGetTag);
-            comboWriter->d_tag = t_pdl->gettag(comboWriter->d_source, comboWriter->d_ednssubnet.source, comboWriter->d_destination, qname, qtype, &comboWriter->d_gettagPolicyTags, comboWriter->d_data, ednsOptions, true, requestorId, deviceId, deviceName, comboWriter->d_routingTag, comboWriter->d_proxyProtocolValues);
+            comboWriter->d_tag = t_pdl->gettag(comboWriter->d_source, comboWriter->d_ednssubnet.getSource(), comboWriter->d_destination, qname, qtype, &comboWriter->d_gettagPolicyTags, comboWriter->d_data, ednsOptions, true, requestorId, deviceId, deviceName, comboWriter->d_routingTag, comboWriter->d_proxyProtocolValues);
             comboWriter->d_eventTrace.add(RecEventTrace::LuaGetTag, comboWriter->d_tag, false);
           }
           // Copy d_gettagPolicyTags to d_policyTags, so other Lua hooks see them and can add their
@@ -453,19 +452,15 @@ static void doProcessTCPQuestion(std::unique_ptr<DNSComboWriter>& comboWriter, s
 
         bool hadError = sendResponseOverTCP(comboWriter, response);
         finishTCPReply(comboWriter, hadError, false);
-        struct timeval now
-        {
-        };
+        struct timeval now{};
         Utility::gettimeofday(&now, nullptr);
         uint64_t spentUsec = uSec(now - start);
         t_Counters.at(rec::Histogram::cumulativeAnswers)(spentUsec);
         comboWriter->d_eventTrace.add(RecEventTrace::AnswerSent);
 
-        if (t_protobufServers.servers && comboWriter->d_logResponse && (!luaconfsLocal->protobufExportConfig.taggedOnly || !pbData || pbData->d_tagged)) {
-          struct timeval tval
-          {
-            0, 0
-          };
+        if (t_protobufServers.servers && comboWriter->d_logResponse && (!luaconfsLocal->protobufExportConfig.taggedOnly || (pbData && pbData->d_tagged))) {
+          struct timeval tval{
+            0, 0};
           protobufLogResponse(dnsheader, luaconfsLocal, pbData, tval, true, comboWriter->d_source, comboWriter->d_destination, comboWriter->d_mappedSource, comboWriter->d_ednssubnet, comboWriter->d_uuid, comboWriter->d_requestorId, comboWriter->d_deviceId, comboWriter->d_deviceName, comboWriter->d_meta, comboWriter->d_eventTrace, comboWriter->d_policyTags);
         }
 
@@ -1090,6 +1085,7 @@ LWResult::Result arecvtcp(PacketBuffer& data, const size_t len, shared_ptr<TCPIO
 unsigned int makeTCPServerSockets(deferredAdd_t& deferredAdds, std::set<int>& tcpSockets, Logr::log_t log, bool doLog, unsigned int instances)
 {
   vector<string> localAddresses;
+  vector<string> logVec;
   stringtok(localAddresses, ::arg()["local-address"], " ,");
 
   if (localAddresses.empty()) {
@@ -1106,7 +1102,7 @@ unsigned int makeTCPServerSockets(deferredAdd_t& deferredAdds, std::set<int>& tc
     if (socketFd < 0) {
       throw PDNSException("Making a TCP server socket for resolver: " + stringerror());
     }
-
+    logVec.emplace_back(address.toStringWithPort());
     setCloseOnExec(socketFd);
 
     int tmp = 1;
@@ -1193,7 +1189,7 @@ unsigned int makeTCPServerSockets(deferredAdd_t& deferredAdds, std::set<int>& tc
 #endif
   }
   if (doLog) {
-    log->info(Logr::Info, "Listening for queries", "protocol", Logging::Loggable("TCP"), "addresses", Logging::IterLoggable(localAddresses.cbegin(), localAddresses.cend()), "socketInstances", Logging::Loggable(instances), "reuseport", Logging::Loggable(g_reusePort));
+    log->info(Logr::Info, "Listening for queries", "protocol", Logging::Loggable("TCP"), "addresses", Logging::IterLoggable(logVec.cbegin(), logVec.cend()), "socketInstances", Logging::Loggable(instances), "reuseport", Logging::Loggable(g_reusePort));
   }
   return localAddresses.size();
 }

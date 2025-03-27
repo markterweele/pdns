@@ -296,6 +296,7 @@ static void declareArguments()
 
   ::arg().setSwitch("traceback-handler", "Enable the traceback handler (Linux only)") = "yes";
   ::arg().setSwitch("direct-dnskey", "Fetch DNSKEY, CDS and CDNSKEY RRs from backend during DNSKEY or CDS/CDNSKEY synthesis") = "no";
+  ::arg().setSwitch("direct-dnskey-signature", "Fetch signature of DNSKEY RRs from backend directly") = "no";
   ::arg().set("default-ksk-algorithm", "Default KSK algorithm") = "ecdsa256";
   ::arg().set("default-ksk-size", "Default KSK size (0 means default)") = "0";
   ::arg().set("default-zsk-algorithm", "Default ZSK algorithm") = "";
@@ -312,13 +313,13 @@ static void declareArguments()
   ::arg().setSwitch("resolve-across-zones", "Resolve CNAME targets and other referrals across local zones") = "yes";
   ::arg().setSwitch("8bit-dns", "Allow 8bit dns queries") = "no";
 #ifdef HAVE_LUA_RECORDS
-  ::arg().setSwitch("enable-lua-records", "Process LUA records for all zones (metadata overrides this)") = "no";
-  ::arg().setSwitch("lua-records-insert-whitespace", "Insert whitespace when combining LUA chunks") = "no";
-  ::arg().set("lua-records-exec-limit", "LUA records scripts execution limit (instructions count). Values <= 0 mean no limit") = "1000";
+  ::arg().setSwitch("enable-lua-records", "Process Lua records for all zones (metadata overrides this)") = "no";
+  ::arg().setSwitch("lua-records-insert-whitespace", "Insert whitespace when combining Lua chunks") = "no";
+  ::arg().set("lua-records-exec-limit", "Lua records scripts execution limit (instructions count). Values <= 0 mean no limit") = "1000";
   ::arg().set("lua-health-checks-expire-delay", "Stops doing health checks after the record hasn't been used for that delay (in seconds)") = "3600";
-  ::arg().set("lua-health-checks-interval", "LUA records health checks monitoring interval in seconds") = "5";
+  ::arg().set("lua-health-checks-interval", "Lua records health checks monitoring interval in seconds") = "5";
   ::arg().set("lua-consistent-hashes-cleanup-interval", "Pre-computed hashes cleanup interval (in seconds)") = "3600";
-  ::arg().set("lua-consistent-hashes-expire-delay", "Cleanup pre-computed hashes that haven't been used for the given delay (in seconds). See pickchashed() LUA function") = "86400";
+  ::arg().set("lua-consistent-hashes-expire-delay", "Cleanup pre-computed hashes that haven't been used for the given delay (in seconds). See pickchashed() Lua function") = "86400";
 #endif
   ::arg().setSwitch("axfr-lower-serial", "Also AXFR a zone from a primary with a lower serial") = "no";
 
@@ -1026,11 +1027,11 @@ static int guardian(int argc, char** argv)
   int infd = 0, outfd = 1;
 
   DynListener dlg(g_programname);
-  dlg.registerFunc("QUIT", &DLQuitHandler, "quit daemon");
-  dlg.registerFunc("CYCLE", &DLCycleHandler, "restart instance");
-  dlg.registerFunc("PING", &DLPingHandler, "ping guardian");
-  dlg.registerFunc("STATUS", &DLStatusHandler, "get instance status from guardian");
-  dlg.registerRestFunc(&DLRestHandler);
+  DynListener::registerExitFunc("QUIT", &DLQuitHandler);
+  DynListener::registerFunc("CYCLE", &DLCycleHandler, "restart instance");
+  DynListener::registerFunc("PING", &DLPingHandler, "ping guardian");
+  DynListener::registerFunc("STATUS", &DLStatusHandler, "get instance status from guardian");
+  DynListener::registerRestFunc(&DLRestHandler);
   dlg.go();
   string progname = argv[0];
 
@@ -1415,7 +1416,7 @@ int main(int argc, char** argv)
     }
     DynListener::registerFunc("SHOW", &DLShowHandler, "show a specific statistic or * to get a list", "<statistic>");
     DynListener::registerFunc("RPING", &DLPingHandler, "ping instance");
-    DynListener::registerFunc("QUIT", &DLRQuitHandler, "quit daemon");
+    DynListener::registerExitFunc("QUIT", &DLRQuitHandler);
     DynListener::registerFunc("UPTIME", &DLUptimeHandler, "get instance uptime");
     DynListener::registerFunc("NOTIFY-HOST", &DLNotifyHostHandler, "notify host for specific zone", "<zone> <host>");
     DynListener::registerFunc("NOTIFY", &DLNotifyHandler, "queue a notification", "<zone>");

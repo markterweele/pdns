@@ -139,8 +139,7 @@ bool PacketHandler::addCDNSKEY(DNSPacket& p, std::unique_ptr<DNSPacket>& r)
   }
 
   bool haveOne=false;
-  DNSSECKeeper::keyset_t entryPoints = d_dk.getEntryPoints(p.qdomain);
-  for(const auto& value: entryPoints) {
+  for (const auto& value : d_dk.getEntryPoints(p.qdomain)) {
     if (!value.second.published) {
       continue;
     }
@@ -173,8 +172,7 @@ bool PacketHandler::addDNSKEY(DNSPacket& p, std::unique_ptr<DNSPacket>& r)
   DNSZoneRecord rr;
   bool haveOne=false;
 
-  DNSSECKeeper::keyset_t keyset = d_dk.getKeys(p.qdomain);
-  for(const auto& value: keyset) {
+  for (const auto& value : d_dk.getKeys(p.qdomain)) {
     if (!value.second.published) {
       continue;
     }
@@ -232,9 +230,7 @@ bool PacketHandler::addCDS(DNSPacket& p, std::unique_ptr<DNSPacket>& r)
 
   bool haveOne=false;
 
-  DNSSECKeeper::keyset_t keyset = d_dk.getEntryPoints(p.qdomain);
-
-  for(auto const &value : keyset) {
+  for (const auto& value : d_dk.getEntryPoints(p.qdomain)) {
     if (!value.second.published) {
       continue;
     }
@@ -413,11 +409,11 @@ bool PacketHandler::getBestWildcard(DNSPacket& p, const DNSName &target, DNSName
 #ifdef HAVE_LUA_RECORDS
       if (rr.dr.d_type == QType::LUA && !d_dk.isPresigned(d_sd.qname)) {
         if(!doLua) {
-          DLOG(g_log<<"Have a wildcard LUA match, but not doing LUA record for this zone"<<endl);
+          DLOG(g_log<<"Have a wildcard Lua match, but not doing Lua record for this zone"<<endl);
           continue;
         }
 
-        DLOG(g_log<<"Have a wildcard LUA match"<<endl);
+        DLOG(g_log<<"Have a wildcard Lua match"<<endl);
 
         auto rec=getRR<LUARecordContent>(rr.dr);
         if (!rec) {
@@ -427,7 +423,7 @@ bool PacketHandler::getBestWildcard(DNSPacket& p, const DNSName &target, DNSName
           //    noCache=true;
           DLOG(g_log<<"Executing Lua: '"<<rec->getCode()<<"'"<<endl);
           try {
-            auto recvec=luaSynth(rec->getCode(), target, d_sd.qname, d_sd.domain_id, p, rec->d_type, s_LUA);
+            auto recvec=luaSynth(rec->getCode(), target, rr, d_sd.qname, p, rec->d_type, s_LUA);
             for (const auto& r : recvec) {
               rr.dr.d_type = rec->d_type; // might be CNAME
               rr.dr.setContent(r);
@@ -514,9 +510,11 @@ DNSName PacketHandler::doAdditionalServiceProcessing(const DNSName &firstTarget,
 }
 
 
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
 void PacketHandler::doAdditionalProcessing(DNSPacket& p, std::unique_ptr<DNSPacket>& r)
 {
   DNSName content;
+  DNSZoneRecord dzr;
   std::unordered_set<DNSName> lookup;
   vector<DNSZoneRecord> extraRecords;
   const auto& rrs = r->getRRS();
@@ -524,6 +522,7 @@ void PacketHandler::doAdditionalProcessing(DNSPacket& p, std::unique_ptr<DNSPack
   lookup.reserve(rrs.size());
   for(auto& rr : rrs) {
     if(rr.dr.d_place != DNSResourceRecord::ADDITIONAL) {
+      content.clear();
       switch(rr.dr.d_type) {
         case QType::NS:
           content=getRR<NSRecordContent>(rr.dr)->getNS();
@@ -546,10 +545,34 @@ void PacketHandler::doAdditionalProcessing(DNSPacket& p, std::unique_ptr<DNSPack
           }
           break;
         }
+        case QType::NAPTR: {
+          auto naptrContent = getRR<NAPTRRecordContent>(rr.dr);
+          auto flags = naptrContent->getFlags();
+          toLowerInPlace(flags);
+          if (flags.find('a') != string::npos) {
+            content = naptrContent->getReplacement();
+            DLOG(g_log<<Logger::Debug<<"adding NAPTR replacement 'a'="<<content<<endl);
+          }
+          else if (flags.find('s') != string::npos) {
+            content = naptrContent->getReplacement();
+            DLOG(g_log<<Logger::Debug<<"adding NAPTR replacement 's'="<<content<<endl);
+            B.lookup(QType(QType::SRV), content, d_sd.domain_id, &p);
+            while(B.get(dzr)) {
+              content=getRR<SRVRecordContent>(dzr.dr)->d_target;
+              if(content.isPartOf(d_sd.qname)) {
+                lookup.emplace(content);
+              }
+              dzr.dr.d_place=DNSResourceRecord::ADDITIONAL;
+              extraRecords.emplace_back(std::move(dzr));
+            }
+            content.clear();
+          }
+          break;
+        }
         default:
           continue;
       }
-      if(content.isPartOf(d_sd.qname)) {
+      if(!content.empty() && content.isPartOf(d_sd.qname)) {
         lookup.emplace(content);
       }
     }
@@ -603,7 +626,6 @@ void PacketHandler::doAdditionalProcessing(DNSPacket& p, std::unique_ptr<DNSPack
     }
   }
 
-  DNSZoneRecord dzr;
   for(const auto& name : lookup) {
     B.lookup(QType(QType::ANY), name, d_sd.domain_id, &p);
     while(B.get(dzr)) {
@@ -1283,9 +1305,9 @@ bool PacketHandler::tryDNAME(DNSPacket& p, std::unique_ptr<DNSPacket>& r, DNSNam
   try {
     getBestDNAMESynth(p, target, rrset);
     if(!rrset.empty()) {
-      for(size_t i = 0; i < rrset.size(); i++) {
-        rrset.at(i).dr.d_place = DNSResourceRecord::ANSWER;
-        r->addRecord(std::move(rrset.at(i)));
+      for (auto& record : rrset) {
+        record.dr.d_place = DNSResourceRecord::ANSWER;
+        r->addRecord(std::move(record));
       }
       return true;
     }
@@ -1293,9 +1315,9 @@ bool PacketHandler::tryDNAME(DNSPacket& p, std::unique_ptr<DNSPacket>& r, DNSNam
     // Add the DNAME regardless, but throw to let the caller know we could not
     // synthesize a CNAME
     if(!rrset.empty()) {
-      for(size_t i = 0; i < rrset.size(); i++) {
-        rrset.at(i).dr.d_place = DNSResourceRecord::ANSWER;
-        r->addRecord(std::move(rrset.at(i)));
+      for (auto& record : rrset) {
+        record.dr.d_place = DNSResourceRecord::ANSWER;
+        r->addRecord(std::move(record));
       }
     }
     throw e;
@@ -1622,7 +1644,7 @@ std::unique_ptr<DNSPacket> PacketHandler::doQuestion(DNSPacket& p)
         if(rec->d_type == QType::CNAME || rec->d_type == p.qtype.getCode() || (p.qtype.getCode() == QType::ANY && rec->d_type != QType::RRSIG)) {
           noCache=true;
           try {
-            auto recvec=luaSynth(rec->getCode(), target, d_sd.qname, d_sd.domain_id, p, rec->d_type, s_LUA);
+            auto recvec=luaSynth(rec->getCode(), target, rr, d_sd.qname, p, rec->d_type, s_LUA);
             if(!recvec.empty()) {
               for (const auto& r_it : recvec) {
                 rr.dr.d_type = rec->d_type; // might be CNAME

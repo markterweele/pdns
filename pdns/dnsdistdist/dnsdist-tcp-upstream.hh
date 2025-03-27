@@ -115,9 +115,9 @@ public:
     return false;
   }
 
-  std::shared_ptr<TCPConnectionToBackend> getOwnedDownstreamConnection(const std::shared_ptr<DownstreamState>& backend, const std::unique_ptr<std::vector<ProxyProtocolValue>>& tlvs);
   std::shared_ptr<TCPConnectionToBackend> getDownstreamConnection(std::shared_ptr<DownstreamState>& backend, const std::unique_ptr<std::vector<ProxyProtocolValue>>& tlvs, const struct timeval& now);
   void registerOwnedDownstreamConnection(std::shared_ptr<TCPConnectionToBackend>& conn);
+  void clearOwnedDownstreamConnections(const std::shared_ptr<DownstreamState>& downstream);
 
   static size_t clearAllDownstreamConnections();
 
@@ -165,6 +165,7 @@ public:
   }
   virtual std::unique_ptr<DOHUnitInterface> getDOHUnit(uint32_t streamID)
   {
+    (void)streamID;
     throw std::runtime_error("Getting a DOHUnit state from a generic TCP/DoT connection is not supported");
   }
   virtual void restoreDOHUnit(std::unique_ptr<DOHUnitInterface>&&)

@@ -299,7 +299,7 @@ public:
 
   static void setECSScopeZeroAddress(const Netmask& scopeZeroMask)
   {
-    s_ecsScopeZero.source = scopeZeroMask;
+    s_ecsScopeZero.setSource(scopeZeroMask);
   }
 
   static void clearECSStats()
@@ -663,7 +663,7 @@ private:
   vector<ComboAddress> retrieveAddressesForNS(const std::string& prefix, const DNSName& qname, vector<std::pair<DNSName, float>>::const_iterator& tns, unsigned int depth, set<GetBestNSAnswer>& beenthere, const vector<std::pair<DNSName, float>>& rnameservers, NsSet& nameservers, bool& sendRDQuery, bool& pierceDontQuery, bool& flawedNSSet, bool cacheOnly, unsigned int& nretrieveAddressesForNS);
 
   void sanitizeRecords(const std::string& prefix, LWResult& lwr, const DNSName& qname, QType qtype, const DNSName& auth, bool wasForwarded, bool rdQuery);
-  void sanitizeRecordsPass2(const std::string& prefix, LWResult& lwr, const DNSName& qname, const DNSName& auth, std::unordered_set<DNSName>& allowedAnswerNames, std::unordered_set<DNSName>& allowedAdditionals, bool isNXDomain, bool isNXQType, std::vector<bool>& skipvec, unsigned int& skipCount);
+  void sanitizeRecordsPass2(const std::string& prefix, LWResult& lwr, const DNSName& qname, QType qtype, const DNSName& auth, std::unordered_set<DNSName>& allowedAnswerNames, std::unordered_set<DNSName>& allowedAdditionals, bool cnameSeen, bool isNXDomain, bool isNXQType, std::vector<bool>& skipvec, unsigned int& skipCount);
   /* This function will check whether the answer should have the AA bit set, and will set if it should be set and isn't.
      This is unfortunately needed to deal with very crappy so-called DNS servers */
   void fixupAnswer(const std::string& prefix, LWResult& lwr, const DNSName& qname, QType qtype, const DNSName& auth, bool wasForwarded, bool rdQuery);
@@ -678,10 +678,10 @@ private:
   boost::optional<Netmask> getEDNSSubnetMask(const DNSName& name, const ComboAddress& rem);
 
   static bool validationEnabled();
-  uint32_t computeLowestTTD(const std::vector<DNSRecord>& records, const std::vector<std::shared_ptr<const RRSIGRecordContent>>& signatures, uint32_t signaturesTTL, const std::vector<std::shared_ptr<DNSRecord>>& authorityRecs) const;
+  uint32_t computeLowestTTD(const std::vector<DNSRecord>& records, const MemRecursorCache::SigRecsVec& signatures, uint32_t signaturesTTL, const MemRecursorCache::AuthRecsVec& authorityRecs) const;
   void updateValidationState(const DNSName& qname, vState& state, vState stateUpdate, const string& prefix);
-  vState validateRecordsWithSigs(unsigned int depth, const string& prefix, const DNSName& qname, QType qtype, const DNSName& name, QType type, const std::vector<DNSRecord>& records, const std::vector<std::shared_ptr<const RRSIGRecordContent>>& signatures);
-  vState validateDNSKeys(const DNSName& zone, const std::vector<DNSRecord>& dnskeys, const std::vector<std::shared_ptr<const RRSIGRecordContent>>& signatures, unsigned int depth, const string& prefix);
+  vState validateRecordsWithSigs(unsigned int depth, const string& prefix, const DNSName& qname, QType qtype, const DNSName& name, QType type, const std::vector<DNSRecord>& records, const MemRecursorCache::SigRecsVec& signatures);
+  vState validateDNSKeys(const DNSName& zone, const std::vector<DNSRecord>& dnskeys, const MemRecursorCache::SigRecsVec& signatures, unsigned int depth, const string& prefix);
   vState getDNSKeys(const DNSName& signer, skeyset_t& keys, bool& servFailOccurred, unsigned int depth, const string& prefix);
   dState getDenialValidationState(const NegCache::NegCacheEntry& negEntry, dState expectedState, bool referralToUnsigned, const string& prefix);
   void updateDenialValidationState(const DNSName& qname, vState& neValidationState, const DNSName& neName, vState& state, dState denialState, dState expectedState, bool isDS, unsigned int depth, const string& prefix);
@@ -908,7 +908,7 @@ class ImmediateServFailException
 {
 public:
   ImmediateServFailException(string reason_) :
-    reason(std::move(reason_)){};
+    reason(std::move(reason_)) {};
 
   string reason; //! Print this to tell the user what went wrong
 };

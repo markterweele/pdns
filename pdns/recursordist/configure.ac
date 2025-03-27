@@ -52,7 +52,7 @@ AC_FUNC_STRERROR_R
 PDNS_CHECK_CLOCK_GETTIME
 
 BOOST_REQUIRE([1.54])
-BOOST_CONTEXT([], [yes])]
+BOOST_CONTEXT([], [yes])
 
 PDNS_ENABLE_UNIT_TESTS
 PDNS_ENABLE_REPRODUCIBLE
@@ -105,7 +105,7 @@ PDNS_CHECK_CURL
 
 dnl the *_r functions are in posix so we can use them unconditionally, but the ext/yahttp code is
 dnl using the defines.
-AC_CHECK_FUNCS_ONCE([localtime_r gmtime_r strcasestr])
+AC_CHECK_FUNCS_ONCE([localtime_r gmtime_r])
 AC_CHECK_FUNCS_ONCE([getrandom getentropy arc4random arc4random_uniform arc4random_buf])
 PDNS_CHECK_SECURE_MEMSET
 
@@ -192,8 +192,8 @@ AC_CONFIG_FILES([Makefile
 	ext/probds/Makefile
 	ext/yahttp/Makefile
 	ext/yahttp/yahttp/Makefile
-	settings/Makefile
-	settings/rust/Makefile])
+	rec-rust-lib/Makefile
+	rec-rust-lib/rust/Makefile])
 
 AC_OUTPUT
 

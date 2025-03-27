@@ -24,6 +24,7 @@
 #include <cstring>
 #include <optional>
 #include <string>
+#include <utility>
 #include <vector>
 #include <set>
 #include <strings.h>
@@ -179,6 +180,13 @@ public:
     return d_storage;
   }
 
+  [[nodiscard]] size_t sizeEstimate() const
+  {
+    return d_storage.size(); // knowingly overestimating small strings as most string
+                             // implementations have internal capacity and we always include
+                             // sizeof(*this)
+  }
+
   bool has8bitBytes() const; /* returns true if at least one byte of the labels forming the name is not included in [A-Za-z0-9_*./@ \\:-] */
 
   class RawLabelsVisitor
@@ -299,7 +307,8 @@ extern const DNSName g_rootdnsname, g_wildcarddnsname;
 template<typename T>
 struct SuffixMatchTree
 {
-  SuffixMatchTree(const std::string& name="", bool endNode_=false) : d_name(name), endNode(endNode_)
+  SuffixMatchTree(std::string name = "", bool endNode_ = false) :
+    d_name(std::move(name)), endNode(endNode_)
   {}
 
   SuffixMatchTree(const SuffixMatchTree& rhs): d_name(rhs.d_name), children(rhs.children), endNode(rhs.endNode)
@@ -326,7 +335,7 @@ struct SuffixMatchTree
   std::string d_name;
   mutable std::set<SuffixMatchTree, std::less<>> children;
   mutable bool endNode;
-  mutable T d_value;
+  mutable T d_value{};
 
   /* this structure is used to do a lookup without allocating and
      copying a string, using C++14's heterogeneous lookups in ordered

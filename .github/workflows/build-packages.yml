@@ -15,10 +15,8 @@ on:
         # please remember to update the pkghashes below when you
         # update this list, as well as the one in builder-dispatch.yml
         default: >-
-          el-7
           el-8
           el-9
-          debian-buster
           debian-bullseye
           debian-bookworm
           ubuntu-focal
@@ -48,7 +46,7 @@ permissions: # least privileges, see https://docs.github.com/en/actions/using-wo
 jobs:
   prepare:
     name: generate OS runner and arch list
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-24.04
     outputs:
       oslist: ${{ steps.get-oslist.outputs.oslist }}
       runnerlist: ${{ steps.get-runnerlist.outputs.runnerlist }}
@@ -58,10 +56,28 @@ jobs:
       # but, as this whole workflow needs at least 30 minutes to run, I prefer spending a few seconds here
       # so that the command remains readable, because jo is simpler to use.
       - run: sudo apt-get update && sudo apt-get -y install jo
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+          submodules: recursive
+          ref: ${{ inputs.ref }}
       - id: get-oslist
-        run: echo "oslist=$(jo -a ${{ inputs.os }})" >> "$GITHUB_OUTPUT"
+        run: |
+          available_targets=$(ls builder-support/dockerfiles/Dockerfile.target.* )
+          for i in $(echo "${{ inputs.os }}"); do
+            if echo $available_targets | grep -qq $i; then
+              targets+=($i)
+            else
+              if [[ "${{ inputs.ref }}" == "master" ]]; then
+                echo "::error title=Dockerfile not found for ${i}::OS ${i} not available as target in ${{ inputs.ref }}" && exit 1
+              else
+                echo "::warning title=Packages will not be generated for ${i}::OS ${i} not available as target in ${{ inputs.ref }}"
+              fi
+            fi
+          done
+          echo "oslist=$(jo -a ${targets[*]})" >> "$GITHUB_OUTPUT"
       - id: get-runnerlist
-        run: echo "runnerlist=$(jo -a ubuntu-22.04 ${{ vars.ARM64_USE_UBICLOUD == '1' && 'ubicloud-standard-2-arm' || '' }})" >> "$GITHUB_OUTPUT"
+        run: echo "runnerlist=$(jo -a ubuntu-24.04 ${{ vars.ARM64_USE_UBICLOUD == '1' && 'ubicloud-standard-2-arm' || '' }})" >> "$GITHUB_OUTPUT"
       - id: get-archlist
         run: echo "archlist=$(jo -a  x86_64 ${{ vars.ARM64_USE_UBICLOUD == '1' && 'aarch64' || '' }})" >> "$GITHUB_OUTPUT"
 
@@ -73,20 +89,14 @@ jobs:
       matrix:
         os: ${{fromJson(needs.prepare.outputs.oslist)}}
         runner-os: ${{ fromJson(needs.prepare.outputs.runnerlist )}}
-        exclude:
-          - os: el-7
-            runner-os: ubicloud-standard-2-arm
       fail-fast: false
     outputs:
       product-name: ${{ steps.normalize-name.outputs.normalized-package-name }}
       version: ${{ steps.getversion.outputs.version }}
-      pkghashes-el-7-x86_64: ${{ steps.pkghashes.outputs.pkghashes-el-7-x86_64 }}
       pkghashes-el-8-x86_64: ${{ steps.pkghashes.outputs.pkghashes-el-8-x86_64 }}
       pkghashes-el-8-aarch64: ${{ steps.pkghashes.outputs.pkghashes-el-8-aarch64 }}
       pkghashes-el-9-x86_64: ${{ steps.pkghashes.outputs.pkghashes-el-9-x86_64 }}
       pkghashes-el-9-aarch64: ${{ steps.pkghashes.outputs.pkghashes-el-9-aarch64 }}
-      pkghashes-debian-buster-x86_64: ${{ steps.pkghashes.outputs.pkghashes-debian-buster-x86_64 }}
-      pkghashes-debian-buster-aarch64: ${{ steps.pkghashes.outputs.pkghashes-debian-buster-aarch64 }}
       pkghashes-debian-bullseye-x86_64: ${{ steps.pkghashes.outputs.pkghashes-debian-bullseye-x86_64 }}
       pkghashes-debian-bullseye-aarch64: ${{ steps.pkghashes.outputs.pkghashes-debian-bullseye-aarch64 }}
       pkghashes-debian-bookworm-x86_64: ${{ steps.pkghashes.outputs.pkghashes-debian-bookworm-x86_64 }}
@@ -147,7 +157,7 @@ jobs:
         shell: bash
         id: srchashes
         run: |
-          echo "srchashes=$(sha256sum ./built_pkgs/*/*/${{ steps.normalize-name.outputs.normalized-package-name }}-${{ steps.getversion.outputs.version }}.tar.bz2 | base64 -w0)" >> $GITHUB_OUTPUT
+          echo "srchashes=$(sha256sum ./built_pkgs/*/*/${{ steps.normalize-name.outputs.normalized-package-name }}-${{ steps.getversion.outputs.version }}.tar.* | base64 -w0)" >> $GITHUB_OUTPUT
       - name: Upload packages to downloads.powerdns.com
         env:
           SSHKEY: ${{ secrets.DOWNLOADS_AUTOBUILT_SECRET }}
@@ -163,17 +173,17 @@ jobs:
           rsync -4rlptD built_pkgs/* "$RSYNCTARGET"
 
   check-hashes:
-    needs: build
+    needs: [prepare, build]
     name: Check if hashes were created for all requested targets
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-24.04
     steps:
       - name: Get list of outputs from build jobs
         run: echo '${{ toJSON(needs.build.outputs) }}' | jq 'keys[]' | grep -vE 'version|product-name' | tee /tmp/build-outputs.txt
       - name: Get list of OS inputs
         run: |
-          for os in ${{ inputs.os }}; do
+          for os in $(echo '${{ needs.prepare.outputs.oslist }}' | jq -r '.[]'); do
             for architecture in x86_64 ${{ vars.ARM64_USE_UBICLOUD == '1' && 'aarch64' || '' }}; do
-              [[ "$os" != "el-7" || "$architecture" != "aarch64"  ]] && echo "\"pkghashes-$os-$architecture\"" | tee -a /tmp/os-inputs.txt
+              echo "\"pkghashes-$os-$architecture\"" | tee -a /tmp/os-inputs.txt
             done
           done
           sort -o /tmp/os-inputs.txt /tmp/os-inputs.txt
@@ -188,9 +198,6 @@ jobs:
       matrix:
         os: ${{fromJson(needs.prepare.outputs.oslist)}}
         architecture: ${{ fromJson(needs.prepare.outputs.archlist )}}
-        exclude:
-          - os: el-7
-            architecture: aarch64
     permissions:
       actions: read   # To read the workflow path.
       id-token: write # To sign the provenance.
@@ -219,14 +226,11 @@ jobs:
   upload-provenance:
     needs: [prepare, build, provenance-src, provenance-pkgs]
     name: Upload the provenance artifacts to downloads.powerdns.com
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-24.04
     strategy:
       matrix:
         os: ${{fromJson(needs.prepare.outputs.oslist)}}
         architecture: ${{ fromJson(needs.prepare.outputs.archlist )}}
-        exclude:
-          - os: el-7
-            architecture: aarch64
     steps:
       - name: Download source tarball provenance for ${{ inputs.product }} (${{ inputs.ref }})
         id: download-src-provenance

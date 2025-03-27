@@ -900,6 +900,9 @@ uint64_t BPFFilter::getHits(const ComboAddress& requestor)
 
 BPFFilter::BPFFilter(std::unordered_map<std::string, MapConfiguration>& configs, BPFFilter::MapFormat format, bool external)
 {
+  (void)configs;
+  (void)format;
+  (void)external;
 }
 
 void BPFFilter::addSocket(int)
@@ -971,8 +974,10 @@ bool BPFFilter::supportsMatchAction(MatchAction action) const
     return true;
   }
   return d_mapFormat == BPFFilter::MapFormat::WithActions;
-#endif /* HAVE_EBPF */
+#else
+  (void)action;
   return false;
+#endif /* HAVE_EBPF */
 }
 
 bool BPFFilter::isExternal() const

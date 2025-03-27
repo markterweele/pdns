@@ -254,6 +254,7 @@ cvstrac
 CXXFLAGS
 cxxsettings
 cxxsupport
+daemonized
 daemonizing
 daemontools
 Daganoto
@@ -284,6 +285,7 @@ defpol
 defttl
 Dehaine
 DENIC
+depfile
 descclassname
 descname
 Dessel
@@ -573,6 +575,7 @@ htbp
 htmlescape
 htmlhelp
 httpapi
+httpcode
 httpdomain
 hubert
 iana
@@ -641,6 +644,7 @@ jsrender
 Juergen
 jumpbox
 Juraj
+Kadyshev
 Kaminsky
 Kaseorg
 Kdhcp
@@ -733,6 +737,7 @@ localip
 localtoc
 locaweb
 lochiiconnectivity
+lockfree
 loglevels
 logmessage
 Loopia
@@ -753,6 +758,7 @@ luarule
 luawrapper
 Lutter
 Luuk
+lvlt
 Machard
 Maik
 Maikel
@@ -864,6 +870,7 @@ Netblock
 netfilter
 netherlabs
 netinet
+NETLINK
 netmaskgroup
 netmasks
 netms
@@ -916,7 +923,7 @@ Novell
 nproxy
 NPTL
 NSes
-nsid
+NSID
 nsis
 nsrecord
 nsset
@@ -1017,6 +1024,7 @@ pickhashed
 picknamehashed
 pickrandom
 pickrandomsample
+pickselfweighted
 pickwhashed
 pickwrandom
 piddir
@@ -1049,9 +1057,11 @@ postinst
 postresolve
 powerdnsrecursor
 powerdnssec
+powerdnssuffix
 powerldap
 pqpp
 Predota
+prefixpowerdns
 preoutquery
 Preproc
 prepublishkeyroll
@@ -1211,6 +1221,7 @@ scopemask
 sdfn
 sdfoijdfio
 sdig
+secnumdepth
 secpoll
 securitypolicy
 securitypolling
@@ -1226,6 +1237,7 @@ servfail
 servicemode
 setaffinity
 setcontent
+setcounter
 setdomainmetadata
 seting
 setkey
@@ -1492,7 +1504,7 @@ versionmodified
 Viala
 viewcode
 visitedlinkcolor
-vixie
+Vixie
 vla
 Voegeli
 Volker

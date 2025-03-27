@@ -80,15 +80,37 @@ namespace LMDBLS {
 
 #endif /* #ifndef DNSDIST */
 
+std::atomic<unsigned int> MDBDbi::d_creationCount{0};
+
 MDBDbi::MDBDbi(MDB_env* /* env */, MDB_txn* txn, const string_view dbname, int flags) : d_dbi(-1)
 {
   // A transaction that uses this function must finish (either commit or abort) before any other transaction in the process may use this function.
 
-  int rc = mdb_dbi_open(txn, dbname.empty() ? 0 : &dbname[0], flags, &d_dbi);
-  if(rc)
-    throw std::runtime_error("Unable to open named database: " + MDBError(rc));
+  int ret = MDBDbi::mdb_dbi_open(txn, dbname.empty() ? nullptr : dbname.data(), flags, &d_dbi);
+  if (ret != 0) {
+    throw std::runtime_error("Unable to open named database: " + MDBError(ret));
+  }
 
   // Database names are keys in the unnamed database, and may be read but not written.
+}
+
+// This is a wrapper around the real mdb_dbi_open(), in order to track creation
+// of new files.
+int MDBDbi::mdb_dbi_open(MDB_txn* txn, const char* name, unsigned int flags, MDB_dbi* dbi)
+{
+  if ((flags & MDB_CREATE) != 0) {
+    flags &= ~MDB_CREATE;
+    int retval = ::mdb_dbi_open(txn, name, flags, dbi);
+    if (retval == MDB_NOTFOUND) {
+      flags |= MDB_CREATE;
+      retval = ::mdb_dbi_open(txn, name, flags, dbi);
+      if (retval == 0) {
+        d_creationCount++;
+      }
+    }
+    return retval;
+  }
+  return ::mdb_dbi_open(txn, name, flags, dbi);
 }
 
 MDBEnv::MDBEnv(const char* fname, int flags, int mode, uint64_t mapsizeMB)
@@ -235,8 +257,9 @@ MDBRWTransactionImpl::MDBRWTransactionImpl(MDBEnv *parent, MDB_txn *txn):
 MDB_txn *MDBRWTransactionImpl::openRWTransaction(MDBEnv *env, MDB_txn *parent, int flags)
 {
   MDB_txn *result;
-  if(env->getROTX() || env->getRWTX())
+  if(env->getRWTX() != 0) {
     throw std::runtime_error("Duplicate RW transaction");
+  }
 
   if(int rc=mdb_txn_begin(env->d_env, parent, flags, &result))
     throw std::runtime_error("Unable to start RW transaction: "+std::string(mdb_strerror(rc)));

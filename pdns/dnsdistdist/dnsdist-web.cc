@@ -43,6 +43,7 @@
 #include "dnsdist-prometheus.hh"
 #include "dnsdist-rings.hh"
 #include "dnsdist-rule-chains.hh"
+#include "dnsdist-rules.hh"
 #include "dnsdist-web.hh"
 #include "dolog.hh"
 #include "gettime.hh"
@@ -213,7 +214,7 @@ private:
   Socket d_socket;
 };
 
-bool addMetricDefinition(const dnsdist::prometheus::PrometheusMetricDefinition& def)
+bool addMetricDefinition([[maybe_unused]] const dnsdist::prometheus::PrometheusMetricDefinition& def)
 {
 #ifndef DISABLE_PROMETHEUS
   return MetricDefinitionStorage::addMetricDefinition(def);
@@ -622,7 +623,7 @@ static void handlePrometheus(const YaHTTP::Request& req, YaHTTP::Response& resp)
       serverName = state->getName();
     }
 
-    boost::replace_all(serverName, ".", "_");
+    std::replace(serverName.begin(), serverName.end(), '.', '_');
 
     const std::string label = boost::str(boost::format(R"({server="%1%",address="%2%"})")
                                          % serverName % state->d_config.remote.toStringWithPort());
@@ -917,7 +918,7 @@ static void handlePrometheus(const YaHTTP::Request& req, YaHTTP::Response& resp)
   output << "dnsdist_info{version=\"" << VERSION << "\"} " << "1" << "\n";
 
   resp.body = output.str();
-  resp.headers["Content-Type"] = "text/plain";
+  resp.headers["Content-Type"] = "text/plain; version=0.0.4";
   // clang-format on
 }
 #endif /* DISABLE_PROMETHEUS */
@@ -1677,9 +1678,7 @@ static void handleRings(const YaHTTP::Request& req, YaHTTP::Response& resp)
   size_t numberOfResponses = 0;
   Json::array queries;
   Json::array responses;
-  struct timespec now
-  {
-  };
+  struct timespec now{};
   gettime(&now);
 
   for (const auto& shard : g_rings.d_shards) {
@@ -1736,7 +1735,7 @@ void clearWebHandlers()
 #ifndef DISABLE_BUILTIN_HTML
 #include "htmlfiles.h"
 
-static void redirectToIndex(const YaHTTP::Request& req, YaHTTP::Response& resp)
+static void redirectToIndex([[maybe_unused]] const YaHTTP::Request& req, YaHTTP::Response& resp)
 {
   const string charset = "; charset=utf-8";
   resp.body.assign(s_urlmap.at("index.html"));

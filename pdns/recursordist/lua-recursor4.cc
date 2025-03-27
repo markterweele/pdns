@@ -89,8 +89,8 @@ boost::optional<Netmask> RecursorLua4::DNSQuestion::getEDNSSubnet() const
     for (const auto& option : *ednsOptions) {
       if (option.first == EDNSOptionCode::ECS) {
         EDNSSubnetOpts eso;
-        if (getEDNSSubnetOptsFromString(option.second, &eso)) {
-          return eso.source;
+        if (EDNSSubnetOpts::getFromString(option.second, &eso)) {
+          return eso.getSource();
         }
         break;
       }
@@ -139,7 +139,7 @@ void RecursorLua4::DNSQuestion::addRecord(uint16_t type, const std::string& cont
   dnsRecord.d_type = type;
   dnsRecord.d_place = place;
   dnsRecord.setContent(DNSRecordContent::make(type, QClass::IN, content));
-  records.push_back(dnsRecord);
+  records.push_back(std::move(dnsRecord));
 }
 
 void RecursorLua4::DNSQuestion::addAnswer(uint16_t type, const std::string& content, boost::optional<int> ttl, boost::optional<string> name)
@@ -449,7 +449,7 @@ void RecursorLua4::postPrepareContext() // NOLINT(readability-function-cognitive
     });
 
   d_lw->writeFunction("getRecursorThreadId", []() {
-    return RecThreadInfo::id();
+    return RecThreadInfo::thread_local_id();
   });
 
   d_lw->writeFunction("sendCustomSNMPTrap", [](const std::string& str) {

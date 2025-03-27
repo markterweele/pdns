@@ -480,7 +480,7 @@ void DynBlockRulesGroup::processResponseRules(counts_t& counts, StatNode& root, 
 
       if (suffixMatchRuleMatches) {
         const bool hit = ringEntry.isACacheHit();
-        root.submit(ringEntry.name, ((ringEntry.dh.rcode == 0 && ringEntry.usec == std::numeric_limits<unsigned int>::max()) ? -1 : ringEntry.dh.rcode), ringEntry.size, hit, boost::none);
+        root.submit(ringEntry.name, ((ringEntry.dh.rcode == 0 && ringEntry.usec == std::numeric_limits<unsigned int>::max()) ? -1 : ringEntry.dh.rcode), ringEntry.size, hit, std::nullopt);
       }
     }
   }
@@ -1037,6 +1037,24 @@ void clearSuffixDynamicRules()
 {
   SuffixDynamicRules emptySMT;
   setSuffixDynamicRules(std::move(emptySMT));
+}
+
+LockGuarded<std::vector<std::shared_ptr<DynBlockRulesGroup>>> s_registeredDynamicBlockGroups;
+
+void registerGroup(std::shared_ptr<DynBlockRulesGroup>& group)
+{
+  s_registeredDynamicBlockGroups.lock()->push_back(group);
+}
+
+void runRegisteredGroups(LuaContext& luaCtx)
+{
+  // only used to make sure we hold the Lua context lock
+  (void)luaCtx;
+  timespec now{};
+  gettime(&now);
+  for (auto& group : *s_registeredDynamicBlockGroups.lock()) {
+    group->apply(now);
+  }
 }
 
 }

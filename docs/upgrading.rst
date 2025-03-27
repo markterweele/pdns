@@ -16,11 +16,31 @@ LUA records whitespace insertion
 
 :ref:`setting-lua-records-insert-whitespace`, introduced in 4.9.1 with the default value (``yes``) set to maintain the old behaviour of inserting whitespace, is set to ``no`` in 5.0.
 
+lua-records-exec-limit feature restored
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+The :ref:`setting-lua-records-exec-limit` setting, which will abort Lua records
+taking too much time to complete, had unintentionally been rendered ineffective
+in 4.3.0. Its functionality has been restored, which could cause existing
+configurations to stop working if this setting had been used with a too small
+value.
+
 ixfrdist IPv6 support
 ^^^^^^^^^^^^^^^^^^^^^
 
 ``ixfrdist`` now binds listening sockets with `IPV6_V6ONLY set`, which means that ``[::]`` no longer accepts IPv4 connections.
 If you want to listen on both IPv4 and IPv6, you need to add a line with ``0.0.0.0`` to the ``listen`` section of your ixfrdist configuration.
+
+pdnsutil behaviour changes
+^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+A few changes of behaviour have been implemented in :doc:`pdnsutil <pdnsutil>`.
+
+* The ``add-zone-key`` command used to default to creating a ZSK,
+  if no key type was given. This default has changed to KSK.
+* The ``add-record``, ``delete-rrset``, ``edit-zone``, ``increase-serial`` and
+  ``replace-rrset`` operations will now refuse to work on secondary zones unless
+  the ``--force`` option is passed.
 
 4.8.0 to 4.9.0
 --------------
@@ -303,10 +323,10 @@ The previous set of indexes for the gsqlite3 backend was found to be poor.
 4.2.x to 4.3.0
 --------------
 
-NSEC(3) TTL changed
-^^^^^^^^^^^^^^^^^^^
+NSEC/NSEC3 TTL changed
+^^^^^^^^^^^^^^^^^^^^^^
 
-NSEC(3) records now use the negative TTL, instead of the SOA minimum TTL.
+NSEC/NSEC3 records now use the negative TTL, instead of the SOA minimum TTL.
 See :ref:`the DNSSEC TTL notes <dnssec-ttl-notes>`  for more information.
 
 Lua Netmask class methods changed
